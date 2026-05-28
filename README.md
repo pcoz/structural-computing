@@ -103,18 +103,38 @@ The detailed documentation lives in the companion worked-examples repo
 - **Reference:** [`docs/reference/`](https://github.com/pcoz/free-fermion-quantum-simulation/tree/main/docs/reference) — API specs.
 - **Glossary + FAQ:** [`docs/glossary.md`](https://github.com/pcoz/free-fermion-quantum-simulation/blob/main/docs/glossary.md), [`docs/faq.md`](https://github.com/pcoz/free-fermion-quantum-simulation/blob/main/docs/faq.md).
 
-## Honest scope
+## Scope
 
-This is **not** a universal computational speedup. The framework's exact
-polynomial-time answers apply to combinatorial problems with the right
-structural shape: planar, bounded-genus, matchgate-Holant-family,
-GF(2)-affine. **Most problems don't have this shape.**
+The framework's exact polynomial-time answers apply natively to problems
+with the right structural shape: planar, bounded-genus, matchgate-Holant-
+family, GF(2)-affine. The active development direction is the
+**reduction / composition / recursive-decomposition layer** that brings
+problems that don't *look* like this shape into it:
 
-When applicable, the framework produces exact, bit-identical answers
-in milliseconds-to-seconds.
+- **Reductions** — one-shot transformations: crossing-elimination gadgets,
+  basis changes, hybrid planar/non-planar decompositions, parity-split,
+  high-degree-vertex splitting, semiring choice, and the rest of the
+  holographic-algorithm transformation arsenal.
+- **Compositions** — combining two or more in-family evaluations to
+  compute an out-of-family quantity: linear combinations, projections of
+  joint distributions, conditional compositions, tensor/Cartesian
+  products, polynomials in matchgate values, holographic-basis pairs
+  (Valiant 2004's central technique), branch-sum recombinations.
+- **Recursive decomposition** — recursively split a problem into
+  sub-problems, base case in-family: tree-decomposition / treewidth-
+  bounded dynamic programming, planar-separator divide-and-conquer,
+  tensor-network contraction in the right order, Shannon expansion
+  (branch on a variable, recurse on each branch), circuit-cutting
+  followed by per-block recursive routing.
 
-When inapplicable, the framework honestly stops and advises the right
-external tool. No silent approximation.
+When the problem is in-shape (or reducible / composable / recursively-
+decomposable to in-shape), the framework produces exact, bit-identical
+answers in milliseconds-to-seconds.
+
+When a problem is genuinely beyond reach (continuous mathematics with no
+discretisation, unbounded matchgate rank with no decomposition, etc.) and
+no known reduction or composition fits, the framework honestly stops and
+advises the right external tool. No silent approximation.
 
 ## Built on holant-tools
 

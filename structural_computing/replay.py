@@ -27,7 +27,8 @@ Use:
 import functools
 import hashlib
 import json
-from typing import Any, Callable, Dict
+from collections import OrderedDict
+from typing import Any, Callable, Dict, Optional
 
 
 _MISS = object()                                  # cache-miss sentinel
@@ -42,24 +43,58 @@ def default_key(data: Any, prev: Any) -> str:
 
 
 class ReplayCache:
-    """A simple dict-backed cache for stage outputs. Unbounded; eviction is
-    a future concern. Statistics: hits, misses, hit_rate, size."""
+    """A cache for stage outputs.
 
-    def __init__(self):
-        self._store: Dict[str, Any] = {}
+    `maxsize=None` (default) gives unbounded behaviour -- the cache keeps
+    every entry it has ever seen. Suitable for short-running pipelines and
+    smoke testing.
+
+    `maxsize=N` gives LRU eviction: when the cache is full, the least-recently-
+    used entry is evicted to make room for a new one. Suitable for long-running
+    pipelines (1000+ stages, MCMC trajectories, multi-day adaptive workflows)
+    where the unique sub-problem count is bounded but unknown.
+
+    Statistics:
+      hits, misses, evictions, hit_rate, size
+    """
+
+    def __init__(self, maxsize: Optional[int] = None):
+        if maxsize is not None and maxsize <= 0:
+            raise ValueError(f"maxsize must be positive or None, got {maxsize}")
+        self.maxsize = maxsize
+        self._store: "OrderedDict[str, Any]" = OrderedDict()
         self.hits = 0
         self.misses = 0
+        self.evictions = 0
 
     def get(self, key: str) -> Any:
         v = self._store.get(key, _MISS)
         if v is _MISS:
             self.misses += 1
             return _MISS
+        # LRU: move accessed key to the end (most-recently-used position).
+        if self.maxsize is not None:
+            self._store.move_to_end(key)
         self.hits += 1
         return v
 
     def put(self, key: str, value: Any) -> None:
+        if key in self._store:
+            # Updating an existing entry -- refresh LRU position.
+            self._store.move_to_end(key)
+            self._store[key] = value
+            return
         self._store[key] = value
+        # Evict least-recently-used entries until we are under maxsize.
+        if self.maxsize is not None:
+            while len(self._store) > self.maxsize:
+                self._store.popitem(last=False)         # pop oldest
+                self.evictions += 1
+
+    def clear(self) -> None:
+        """Drop every cached entry. Statistics (hits/misses/evictions) are
+        preserved -- they describe the workload, not the cache state."""
+        self._store.clear()
 
     def hit_rate(self) -> float:
         total = self.hits + self.misses
