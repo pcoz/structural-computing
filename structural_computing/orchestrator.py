@@ -388,10 +388,20 @@ def _matchgate_rank_leaf(problem: Any, question: str) -> int:
 
 
 def _is_matchgate_realisable_leaf(problem: Any, question: str) -> bool:
+    """is_matchgate_realisable on a symmetric signature (T2/T3): True
+    iff the basis-aware matchgate rank is at least 1 (equivalently:
+    the signature isn't the all-zero function). Delegates to the rank
+    leaf, which is the publicly-original "rank in {0, 1, 2} for every
+    symmetric signature" result."""
     return _matchgate_rank_leaf(problem, "matchgate_rank") >= 1
 
 
 def _classify_function_leaf(problem: Any, question: str) -> Classification:
+    """classify_function on a symmetric signature (T2/T3): return the
+    framework's :class:`Classification` object for the signature so
+    the caller can read the tier, the basis-aware rank, and the
+    reasoning string in one call (without going through the
+    orchestrator's normal direct-dispatch path)."""
     if not isinstance(problem, dict) or "values" not in problem:
         raise ValueError("classify_function_leaf expects {values: ...}")
     return classify_signature(problem["values"])

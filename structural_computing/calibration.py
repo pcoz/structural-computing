@@ -24,9 +24,18 @@ The calibration data structure (matches the bench repo's render output):
         ...
     }
 
-The router does NOT consume this data directly in v0.2; it remains
-available via :func:`predict_seconds` for diagnostic / planning use.
-A v0.3 deliverable wires the predictions into route-selection itself.
+After ``apply_calibration()`` is called, the framework consumes the
+data in two places:
+
+  1. :func:`structural_computing.route.route` switches its ``cost``
+     field to ``log2(predicted_seconds)`` and tags ``cost_unit =
+     "log2_seconds"`` in the meters (v0.3.0a1). Without calibration,
+     ``cost`` stays as the ``log2(ops)`` heuristic with
+     ``cost_unit = "log2_ops"``.
+  2. ``Orchestrator.evaluate()`` emits a ``[predict]`` workflow step
+     before each direct dispatch, recording the predicted seconds and
+     the size-hint used (so verbose mode shows what cost the framework
+     expects the leaf evaluator to incur).
 
 Usage::
 

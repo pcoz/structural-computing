@@ -226,6 +226,19 @@ class TreewidthBoundedDP:
         self.tree_decomposition = tree_decomposition
 
     def decompose(self, problem: Any) -> "DecompositionPlan":
+        """Run the Bodlaender-style multi-bag DP over the supplied
+        tree decomposition.
+
+        Returns a :class:`DecompositionPlan` carrying a precomputed
+        value (the matching count). The plan's ``evaluate(leaf)`` is
+        a no-op that returns the precomputed result; the leaf
+        evaluator is unused. This is intentional: the multi-bag DP
+        already does the work internally, so there's nothing for a
+        leaf evaluator to add.
+
+        Single-bag mode (no tree decomposition supplied) still emits
+        a leaf-style plan for the v0.1 compatibility path.
+        """
         if not isinstance(problem, dict) or "vertices" not in problem:
             raise ValueError(
                 f"{self.name}: problem must be a graph dict with 'vertices' "
@@ -491,6 +504,20 @@ class PlanarSeparator:
         self.side_b    = set(side_b)
 
     def decompose(self, problem: Any) -> "DecompositionPlan":
+        """Build the separator-decomposition tree for ``problem``.
+
+        Returns a :class:`DecompositionPlan` whose top-level combines
+        (sums) over all valid ``(S_to_A, S_to_B, S_pairs)`` partitions
+        of the separator vertices. Each child has two leaf sub-graphs
+        (A-side and B-side) and a per-child combine that multiplies
+        their evaluated PerfMatches by the S-pairs weight.
+
+        Raises ``ValueError`` if ``problem`` isn't a graph dict, if the
+        three sets don't partition the vertex set, or if any edge
+        crosses ``side_a`` -> ``side_b`` directly (proof that the
+        supplied set isn't a real separator). See the class docstring
+        for the full algorithm.
+        """
         if not isinstance(problem, dict) or "vertices" not in problem:
             raise ValueError(
                 f"{self.name}: expects a graph dict with 'vertices' and 'edges'"
@@ -661,6 +688,23 @@ class RecursiveCircuitCut:
         self.cut: List[Tuple] = [tuple(e) for e in cut]
 
     def decompose(self, problem: Any) -> "DecompositionPlan":
+        """Build the circuit-cut decomposition tree for ``problem``.
+
+        Returns a :class:`DecompositionPlan` whose top-level sums over
+        the ``2^|cut|`` subsets of the cut edges. Each subset specifies
+        which cut edges are forced INTO the matching (their endpoints
+        removed) and which are forced OUT (the edges deleted). Each
+        child carries a single leaf sub-graph and a combine that
+        multiplies the leaf's evaluated PerfMatch by the forced-in
+        weight product.
+
+        Subsets where two forced-in edges share a vertex are PRUNED
+        (the matching can't contain both); the actual number of
+        children is at most ``2^|cut|`` but may be smaller.
+
+        Raises ``ValueError`` if ``problem`` isn't a graph dict, or if
+        any cut edge is not present in the graph.
+        """
         if not isinstance(problem, dict) or "vertices" not in problem:
             raise ValueError(
                 f"{self.name}: expects a graph dict with 'vertices' and 'edges'"
