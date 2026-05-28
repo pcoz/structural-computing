@@ -94,7 +94,57 @@ What this release **is not**:
   via
   [`ORIENTATION.md`](https://github.com/pcoz/admissibility-geometry/blob/main/ORIENTATION.md).
 
-## [Unreleased] — v0.1.0a2 follow-up work
+## [Unreleased] — v0.1.0a3 follow-up
+
+Shipped after v0.1.0a2 in the same session:
+
+- **Per-primitive pytest files** added under `tests/`:
+  - `test_pipeline_router.py` (15 tests covering Stage/Route/Trace/run_pipeline/run_pipeline_streaming)
+  - `test_classify.py` (15 tests covering classify_constraint_set, classify_graph, classify_signature, top-level dispatcher)
+  - `test_route.py` (13 tests covering tier → member routing and the 4^g cost scaling)
+  - `test_trace.py` (11 tests covering RichTrace aggregation and windowing)
+  - `test_verifier.py` (15 tests covering brute_force_count_matchings, GF(2) enumeration, gibbs_expectation_brute, verify_pipeline)
+- Combined test surface: ~145+ tests across 9 files; all primitives now have
+  pytest-level coverage of their public surface.
+
+- **Calibrated cost models in `route.py`.** Replaced the flat `2 log2 n`
+  surrogate with **tier-specific asymptotic complexity estimates**:
+  - T0/T1 (CH-form, Gauss-elim): `3 * log2(n) + 0.5` / `+ 1.0`
+  - T2 (FKT Pfaffian): `3 * log2(2|V|) + 1.5`
+  - T3 (basis-aware rank-2 parity-split): T2 cost + `log2(rank)`
+  - T4 (genus-g Kasteleyn): T2 cost + `g * log2(4)` (preserves 4^g scaling)
+  - Tropical Pfaffian (T6 planar): same shape as T2
+  Each cost model is now explicit in `Route.meters["cost_model"]` so
+  downstream tooling can inspect why a given cost was reported. Note: the
+  constants are asymptotic-complexity estimates, not benchmark-calibrated.
+  Real benchmark-driven calibration with per-platform constants is a v0.2
+  deliverable; until then, the relative cost ordering between tiers is
+  what the router needs for member selection, which this model provides.
+
+- **Reductions / compositions / recursive-decomposition layer foundation.**
+  Three new modules with the API surface in place and one concrete
+  operation per module, plus sketches of upcoming operations as
+  `NotImplementedError` with clear v0.2 docstrings:
+  - `transform.py` — the `Reduction` protocol, `ReductionPlan` for
+    sequencing, `ReductionResult` dataclass; `NormaliseGraphFormat`
+    concrete reduction; sketches of `CrossingElimination`,
+    `HighDegreeVertexSplit`, `HybridDecomposition`, `RationaliseWeights`.
+  - `compose.py` — the `Composition` protocol, `CompositionPlan`
+    dataclass; `LinearCombination` concrete composition; sketches of
+    `Projection`, `HolographicBasisPair`, `BranchSum`.
+  - `decompose.py` — the `Decomposition` protocol, `DecompositionPlan`
+    dataclass; `ShannonExpansion` concrete decomposition; sketches of
+    `TreewidthBoundedDP`, `PlanarSeparator`, `RecursiveCircuitCut`.
+
+  This is the foundation for the v0.2+ work of widening the in-family
+  boundary. The full set of planned operations is documented in the
+  research-repo proposal `proposals/reductions_compositions_recursive_decomposition.md`.
+
+- **`__all__` and public-API expanded** with the 23 new symbols from the
+  reductions / compositions / decomposition layer. Top-level `import
+  structural_computing` now exposes 47 public names.
+
+## [0.1.0a2] — 2026-05-28 (later same day)
 
 Shipped after v0.1.0a1 in the same session:
 

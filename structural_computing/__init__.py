@@ -47,6 +47,36 @@ from .verifier import (
     gibbs_expectation_brute,
     verify_pipeline,
 )
+# Reductions / compositions / recursive-decomposition layer (v0.1
+# foundation; the full set of concrete reductions lives in the v0.2
+# roadmap).
+from .transform import (
+    Reduction,
+    ReductionResult,
+    ReductionPlan,
+    ReductionNotApplicable,
+    NormaliseGraphFormat,
+    CrossingElimination,
+    HighDegreeVertexSplit,
+    HybridDecomposition,
+    RationaliseWeights,
+)
+from .compose import (
+    Composition,
+    CompositionPlan,
+    LinearCombination,
+    Projection,
+    HolographicBasisPair,
+    BranchSum,
+)
+from .decompose import (
+    Decomposition,
+    DecompositionPlan,
+    ShannonExpansion,
+    TreewidthBoundedDP,
+    PlanarSeparator,
+    RecursiveCircuitCut,
+)
 
 __all__ = [
     # Wrapper class (the main entry point)
@@ -81,6 +111,30 @@ __all__ = [
     "enumerate_satisfying_assignments",
     "gibbs_expectation_brute",
     "verify_pipeline",
+    # Reductions
+    "Reduction",
+    "ReductionResult",
+    "ReductionPlan",
+    "ReductionNotApplicable",
+    "NormaliseGraphFormat",
+    "CrossingElimination",
+    "HighDegreeVertexSplit",
+    "HybridDecomposition",
+    "RationaliseWeights",
+    # Compositions
+    "Composition",
+    "CompositionPlan",
+    "LinearCombination",
+    "Projection",
+    "HolographicBasisPair",
+    "BranchSum",
+    # Recursive decomposition
+    "Decomposition",
+    "DecompositionPlan",
+    "ShannonExpansion",
+    "TreewidthBoundedDP",
+    "PlanarSeparator",
+    "RecursiveCircuitCut",
     # Version
     "__version__",
 ]

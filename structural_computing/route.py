@@ -29,13 +29,68 @@ from .classify import Classification
 from .pipeline_router import Route
 
 
-# Established cost constants (mirror hybrid_dispatcher.py's conventions).
-_GENUS_FACTOR = math.log2(4)                 # 4^g for genus-g cost growth
+# ---------------------------------------------------------------------------
+# Cost model -- per-tier asymptotic complexity, in log2(ops) units
+# ---------------------------------------------------------------------------
+#
+# Each tier's runtime is dominated by a specific algorithmic operation:
+#
+#   T0 / T1   Gaussian elimination on the affine variety: O(n^3) in the
+#             number of variables n. The CH-form data carries O(n*k) where
+#             k <= n is the support dimension; per-amplitude readout is one
+#             GF(2) solve which is O(n^2).
+#   T2        FKT planar Pfaffian: O(n^3) in the number of vertices n.
+#             Constant overhead for Kasteleyn orientation construction.
+#   T3        Basis-aware rank-2 decomposition: O(n^3) per parity branch;
+#             at most 2 branches for symmetric signatures. So O(2 * n^3),
+#             which in log2-space is T2_cost + log2(rank).
+#   T4        Galluccio-Loebl genus-g Kasteleyn: O(4^g * n^3). In log2,
+#             that's T2_cost + g * log2(4) = T2_cost + 2g.
+#   T5 / T6   advised tiers (pending native implementation); cost +inf.
+#   T7        out-of-family advised; cost +inf.
+#
+# The constants below capture these complexities at the log2-of-ops level
+# of granularity. They are NOT benchmark-calibrated -- they are
+# asymptotic-complexity estimates. Benchmark-driven calibration (with
+# measured constants per tier per platform) is a v0.2 deliverable; until
+# then this model gives reasonable RELATIVE cost ordering between tiers,
+# which is what the router needs for member selection.
+
+_GENUS_FACTOR = math.log2(4)              # log2(4^g) per unit of genus
+
+# Per-tier polynomial degree (the exponent in n^d).
+_POLY_DEGREE_T0_T1 = 3.0                  # GF(2) Gaussian elimination
+_POLY_DEGREE_T2_T3_T4 = 3.0               # Pfaffian / Kasteleyn
+
+# Per-tier constant overhead (log2 of the multiplicative constant).
+# These approximate the relative cost of setup work between tiers; tuned
+# to the level "T2 should look a bit more expensive than T0 for a given n
+# because the Pfaffian setup is more involved than the affine-variety
+# read-off."
+_OVERHEAD_T0 = 0.5
+_OVERHEAD_T1 = 1.0
+_OVERHEAD_T2 = 1.5
+_OVERHEAD_T3 = 1.5
+_OVERHEAD_T4 = 1.5
+
+
+def _poly_cost(n: int, degree: float = 3.0, overhead: float = 0.0) -> float:
+    """Asymptotic cost in log2(ops): `degree * log2(n) + overhead`.
+
+    `degree` is the polynomial degree (3 for cubic algorithms like Pfaffian
+    or Gaussian elimination; 2 for quadratic; etc.). `overhead` is a
+    constant added in log2-space to capture per-tier setup work.
+
+    Returns log2(2) = 1.0 as a floor for n < 2 to avoid log2(0) = -inf
+    swallowing legitimately-small problems.
+    """
+    return degree * math.log2(max(n, 2)) + overhead
 
 
 def _poly(n: int) -> float:
-    """A 2 log2 n surrogate for "polynomial". Same convention as
-    hybrid_dispatcher.route_block's `_poly` helper."""
+    """Backward-compatible alias for the legacy `2 log2 n` surrogate.
+    Kept for callers that depend on the old shape; new code should call
+    `_poly_cost` with explicit degree and overhead."""
     return 2.0 * math.log2(max(n, 2))
 
 
@@ -48,29 +103,41 @@ def route(classification: Classification) -> Route:
 
     if tier == "T0":
         nv = int(m.get("n_variables", 1))
+        # GF(2) Gaussian elimination is O(n^3) on n variables; in log2 ops:
+        # 3 * log2(n) + small overhead. The +1 in nv+1 avoids log2(0) for
+        # zero-variable degenerate cases.
         return Route(
             member="ch-form",
-            cost=_poly(nv + 1),
-            meters={**m, "model": "affine-quadratic support directions"},
+            cost=_poly_cost(nv + 1, degree=_POLY_DEGREE_T0_T1, overhead=_OVERHEAD_T0),
+            meters={**m, "model": "affine-quadratic support directions",
+                    "cost_model": "3*log2(n) + 0.5 (CH-form, Gauss-elim)"},
             tier=tier,
         )
 
     if tier == "T1":
         nl = int(m.get("n_linear", 0))
         nq = int(m.get("n_quadratic", 0))
+        # T1 = T0 + post-selecting Z measurements; same asymptotic but
+        # slightly higher constant overhead.
         return Route(
             member="ch-form",
-            cost=_poly(nl + nq + 1),
-            meters={**m, "model": "affine-quadratic with post-selecting Z measurements"},
+            cost=_poly_cost(nl + nq + 1, degree=_POLY_DEGREE_T0_T1, overhead=_OVERHEAD_T1),
+            meters={**m, "model": "affine-quadratic with post-selecting Z measurements",
+                    "cost_model": "3*log2(n) + 1.0 (CH-form + post-selection)"},
             tier=tier,
         )
 
     if tier == "T2":
         nv = int(m.get("n_vertices", m.get("arity", 2)))
+        # FKT planar Pfaffian is O(n^3) in the number of vertices. We pass
+        # `2 * nv` to capture the matrix-size factor that the Kasteleyn
+        # orientation introduces (the antisymmetric matrix has 2*|V| rows
+        # after the orientation step).
         return Route(
             member="free-fermion",
-            cost=_poly(2 * nv),
-            meters={**m, "model": "FKT planar Pfaffian"},
+            cost=_poly_cost(2 * nv, degree=_POLY_DEGREE_T2_T3_T4, overhead=_OVERHEAD_T2),
+            meters={**m, "model": "FKT planar Pfaffian",
+                    "cost_model": "3*log2(2|V|) + 1.5 (Pfaffian)"},
             tier=tier,
         )
 
@@ -78,10 +145,14 @@ def route(classification: Classification) -> Route:
         ar = int(m.get("arity", 3))
         rank = int(m.get("basis_aware_rank", 2))
         if rank <= 2:
+            # Basis-aware rank-2 decomposition runs the Pfaffian once per
+            # parity branch (up to 2 branches), so cost adds log2(max(1, rank)).
             return Route(
                 member="free-fermion",
-                cost=_poly(2 * ar),
-                meters={**m, "model": f"FKT + basis-aware rank-{rank} parity-split decomposition"},
+                cost=(_poly_cost(2 * ar, degree=_POLY_DEGREE_T2_T3_T4, overhead=_OVERHEAD_T3)
+                       + math.log2(max(1, rank))),
+                meters={**m, "model": f"FKT + basis-aware rank-{rank} parity-split decomposition",
+                        "cost_model": f"3*log2(2*arity) + 1.5 + log2({rank}) (parity-split)"},
                 tier=tier,
             )
         return Route(
@@ -94,10 +165,15 @@ def route(classification: Classification) -> Route:
     if tier == "T4":
         nv = int(m.get("n_vertices", 4))
         g = int(m.get("genus", 1))
+        # Galluccio-Loebl genus-g formula: O(4^g * Pfaffian) per spin
+        # structure. In log2 that's g * log2(4) added to the planar
+        # Pfaffian cost.
         return Route(
             member="free-fermion",
-            cost=g * _GENUS_FACTOR + _poly(2 * nv),
-            meters={**m, "model": f"genus-{g} Kasteleyn (Klein arc, 4^g scaling)"},
+            cost=(g * _GENUS_FACTOR
+                   + _poly_cost(2 * nv, degree=_POLY_DEGREE_T2_T3_T4, overhead=_OVERHEAD_T4)),
+            meters={**m, "model": f"genus-{g} Kasteleyn (Klein arc, 4^g scaling)",
+                    "cost_model": f"{g}*log2(4) + 3*log2(2|V|) + 1.5 (genus-{g} Kasteleyn)"},
             tier=tier,
         )
 
@@ -114,8 +190,9 @@ def route(classification: Classification) -> Route:
         if classification.in_family and m.get("planar", False):
             return Route(
                 member="tropical-pfaffian",
-                cost=_poly(2 * nv),
-                meters={**m, "model": "planar tropical Pfaffian"},
+                cost=_poly_cost(2 * nv, degree=_POLY_DEGREE_T2_T3_T4, overhead=_OVERHEAD_T2),
+                meters={**m, "model": "planar tropical Pfaffian",
+                        "cost_model": "3*log2(2|V|) + 1.5 (tropical Pfaffian)"},
                 tier=tier,
             )
         return Route(

@@ -30,21 +30,41 @@ def test_version_present():
 
 
 def test_public_api_complete():
-    """All expected names are exported from the top level."""
+    """All expected names are exported from the top level. As the public
+    API grows, update both this set and structural_computing/__init__.py
+    in lockstep."""
     expected = {
+        # Wrapper
         "StructuralComputer", "CompareReport", "NotInFamily",
+        # Pipeline framework
         "Stage", "Route", "StageRecord", "Trace",
         "run_pipeline", "run_pipeline_streaming",
+        # Classifier
         "Classification", "classify", "classify_constraint_set",
         "classify_graph", "classify_signature",
-        "route", "RichTrace", "RegimeChange",
+        # Router
+        "route",
+        # Trace aggregator
+        "RichTrace", "RegimeChange",
+        # Replay cache
         "ReplayCache", "cached_runner", "default_key",
+        # Verifier
         "brute_force_count_matchings", "satisfies_gf2_affine",
         "enumerate_satisfying_assignments", "gibbs_expectation_brute",
         "verify_pipeline",
+        # Reductions (v0.1 foundation; concrete reductions in v0.2)
+        "Reduction", "ReductionResult", "ReductionPlan", "ReductionNotApplicable",
+        "NormaliseGraphFormat", "CrossingElimination", "HighDegreeVertexSplit",
+        "HybridDecomposition", "RationaliseWeights",
+        # Compositions
+        "Composition", "CompositionPlan", "LinearCombination",
+        "Projection", "HolographicBasisPair", "BranchSum",
+        # Recursive decomposition
+        "Decomposition", "DecompositionPlan", "ShannonExpansion",
+        "TreewidthBoundedDP", "PlanarSeparator", "RecursiveCircuitCut",
     }
     actual = set(structural_computing.__all__) - {"__version__"}
-    assert actual == expected
+    assert actual == expected, f"differences: {actual ^ expected}"
 
 
 # ---------------------------------------------------------------------------
