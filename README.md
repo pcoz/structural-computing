@@ -103,10 +103,20 @@ layer for users widening the in-family boundary.
 
 ## Status
 
-**Alpha** (v0.1.0a1). API may change before v1.0. Foundational components
-(test suite, calibrated cost models, ReplayCache eviction) are still
-being built out. See [CHANGELOG.md](CHANGELOG.md) for what's in this
+**Alpha** (v0.2.0a1). API may still shift before v1.0, but the public
+surface is now stable enough for downstream prototyping. ~200 tests
+across ~14 test modules pass; the orchestrator handles all three
+problem types (graphs / constraint sets / signatures) with full
+provenance. The reductions / compositions / recursive-decomposition
+layer ships real Cai-Gorenstein and Cai-Lu constructions, not
+placeholders. See [CHANGELOG.md](CHANGELOG.md) for what's in this
 release and what's coming.
+
+Companion repo
+[`structural-computing-bench`](https://github.com/pcoz/structural-computing-bench)
+calibrates the router's cost models on your machine and produces a
+data file the framework loads via `apply_calibration()` — see the
+"Calibrated cost models" section below.
 
 ## What this is for
 
@@ -200,44 +210,93 @@ from structural_computing import (
 ```
 
 The reductions / compositions / decompositions layer is the framework's
-**in-family-boundary widener**. v0.1 ships:
+**in-family-boundary widener**. v0.2 ships these as REAL constructions
+(no placeholders):
+
+**Reductions** (`transform.py`):
 
 - `NormaliseGraphFormat` — coerce edge-list / adjacency-dict / rotation-
   system inputs into a canonical form.
 - `HybridDecomposition` — branch on a small set of "extra" edges that
   make a graph non-planar; pay 2^|extras| × O(|V|^3) for the exact
-  matching count.
+  matching count. Includes `auto_detect_extras` greedy heuristic.
+- `RationaliseWeights` — scale real-valued edge weights to integers at
+  chosen precision, with inverse to descale the final answer.
+- `CrossingElimination` — Cai-Gorenstein 6-vertex / weight-(-1) crossover
+  gadget at each declared crossing (arXiv:1303.6729 Fig. 6). Preserves
+  matchgate signature (signed Pfaffian).
+- `HighDegreeVertexSplit` — Cai-Gorenstein 2k-node triangle-cycle
+  realisation of matchgate-realisable symmetric signatures (Theorem 9 +
+  Fig. 10).
+
+**Compositions** (`compose.py`):
+
 - `LinearCombination` — combine two or more in-family signature
   evaluations as `sum(coeff_i * value_i)`.
+- `HolographicBasisPair` — Cai-Lu 2011 polynomial-substitution basis
+  change on symmetric signatures + matchgate-realisability check via
+  the order-2 recurrence rank test (Theorem 2.5). The Hadamard basis
+  transforms `[1, 0, 0, 1]` into the matchgate-standard
+  `[0, 2, 0, 2]` — the canonical Valiant-style holographic unlock.
+
+**Decompositions** (`decompose.py`):
+
 - `ShannonExpansion` — branch on a binary variable; recurse on each
   branch; base case in-family.
-- `TreewidthBoundedDP` — single-bag tree-decomposition (DP framework
-  in place; multi-bag is the v0.2 deliverable via Bodlaender / Korhonen).
+- `TreewidthBoundedDP` — full Bodlaender-style multi-bag DP for matching
+  count on bounded-treewidth graphs.
 
-Sketches with detailed v0.2 docstrings (raised as `NotImplementedError`
-today): `CrossingElimination`, `HighDegreeVertexSplit`,
-`RationaliseWeights`, `Projection`, `HolographicBasisPair`, `BranchSum`,
-`PlanarSeparator`, `RecursiveCircuitCut`.
+Still-sketches with `NotImplementedError` (v0.3 roadmap):
+`Projection`, `BranchSum`, `PlanarSeparator`, `RecursiveCircuitCut`,
+auto-discovery of T in `HolographicBasisPair` (full Cai-Lu SRP
+algorithm), non-symmetric `HolographicBasisPair`.
 
 See the full API reference at the worked-examples repo:
 [`docs/reference/`](https://github.com/pcoz/free-fermion-quantum-simulation/tree/main/docs/reference).
 
 ## Runnable examples
 
-The [`examples/`](examples/) folder contains six self-contained scripts
+The [`examples/`](examples/) folder contains 11 self-contained scripts
 runnable after `pip install`:
 
 | | |
 |---|---|
-| `01_count_matchings.py`         | exact perfect-matching count |
-| `02_rare_tail_probability.py`   | exact rare-tail probability |
-| `03_compare_configurations.py`  | sub-MC-noise-floor comparison |
-| `04_orchestrator_dispatch.py`   | the Orchestrator's direct-dispatch + honest-stop |
-| `05_hybrid_decomposition.py`    | exact matching count on non-planar K_{3,3} |
-| `06_signature_classification.py`| basis-aware rank ≤ 2 across 11 classical symmetric signatures |
+| `01_count_matchings.py`              | exact perfect-matching count |
+| `02_rare_tail_probability.py`        | exact rare-tail probability |
+| `03_compare_configurations.py`       | sub-MC-noise-floor comparison |
+| `04_orchestrator_dispatch.py`        | Orchestrator direct-dispatch + honest-stop |
+| `05_hybrid_decomposition.py`         | exact matching count on non-planar K_{3,3} |
+| `06_signature_classification.py`     | basis-aware rank ≤ 2 across symmetric signatures |
+| `07_treewidth_bounded_dp.py`         | multi-bag Bodlaender DP on a tree decomp |
+| `08_rationalise_weighted_matching.py`| float weights → integer arithmetic with exact descale |
+| `09_holographic_basis_unlock.py`     | Hadamard basis turns 3-AND into matchgate-standard form |
+| `10_crossing_elimination_k4.py`      | Cai-Gorenstein gadget at K_4's diagonal crossing |
+| `11_high_degree_vertex_split.py`     | 2k-node triangle cycle realising a high-arity symmetric signature |
 
 Each example produces a bit-identically reproducible number. See
 [`examples/README.md`](examples/README.md) for the index.
+
+## Calibrated cost models
+
+The router's default cost estimates are hand-picked log2(ops) numbers.
+For machine-specific predictions, install the companion repo
+[`structural-computing-bench`](https://github.com/pcoz/structural-computing-bench),
+run the calibration once, and load the resulting data file:
+
+```python
+from my_calibration_file import CALIBRATED_COSTS
+from structural_computing import apply_calibration
+
+apply_calibration(CALIBRATED_COSTS)
+
+# Now `route(..., question=...)` surfaces wall-clock predictions,
+# and `orchestrator.evaluate(..., verbose=True)` emits a 'predict'
+# step in the workflow trace before each leaf dispatch.
+```
+
+The calibration loader is opt-in; the framework runs with hand-picked
+cost models if you skip it. See `bench/README.md` for the calibration
+sweep details.
 
 ## Documentation
 
@@ -313,18 +372,23 @@ If you use this package in published work, please cite:
 
 ```
 Edward Chalk (sapientronic.ai). "structural-computing: declarative
-structural computation in Python." Version 0.1.0a1, 2026.
+structural computation in Python." Version 0.2.0a1, 2026.
 https://github.com/pcoz/structural-computing
 ```
 
 ## Roadmap
 
-- **v0.1.0** (target): test suite + CI matrix + calibrated cost models +
-  expanded wrapper API (constraint sets, signatures as first-class).
-- **v0.2.0**: ReplayCache eviction policy, matching-polynomial form for
-  `tail_probability` on larger graphs.
+- **v0.2.0a1** (current): orchestrator with workflow trace + verbose
+  mode; all v0.2 reductions / compositions / decompositions as REAL
+  Cai-Gorenstein and Cai-Lu constructions; calibration loader hooked
+  into the router; 11 self-contained examples; ~200 tests.
+- **v0.3.0** (in progress): wire calibration into route-selection
+  itself (not just diagnostics); auto-discovery of T in
+  `HolographicBasisPair` (Cai-Lu SRP algorithm); non-symmetric
+  `HolographicBasisPair` via the full tensor-power transform;
+  `Projection`, `BranchSum`, `PlanarSeparator`, `RecursiveCircuitCut`.
 - **v1.0.0**: API stability contract; production-ready for downstream
   packages.
 
-See the long-horizon roadmap in the research repo's [`FUTURE_DIRECTIONS.md`](https://github.com/pcoz/admissibility-geometry/blob/main/FUTURE_DIRECTIONS.md)
-for context on the paradigm-level direction this package serves.
+The long-horizon roadmap and the paradigm-level direction this package
+serves are in the private research repo.
