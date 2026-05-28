@@ -129,24 +129,63 @@ class LinearCombination:
 # Sketches of upcoming compositions
 # ---------------------------------------------------------------------------
 
+@dataclasses.dataclass
 class Projection:
-    """Two Holant evaluations on different graphs that project into the
-    same answer space; the non-conforming quantity is the projection.
+    r"""Evaluate two or more in-family sub-problems and project their
+    values through a user-supplied projector callable to obtain the
+    composed quantity.
 
-    Used in the framework where the answer is a sum or marginal over a
-    joint distribution whose factors are matchgate-Holant but the joint
-    isn't.
+    Use case: the answer Q is a sum, marginal, or other functional of
+    several matchgate-Holant evaluations. For example:
 
-    Status: not implemented in v0.1. The mathematical content is
-    Bayesian / message-passing in matchgate-Holant; implementation needs
-    to nail down the API for joint vs. marginal problem objects.
-    """
-    name = "Projection"
+      * Marginal probability: Q = Z_in / Z_total, where Z_in is the
+        partition function restricted to "in-set" configurations and
+        Z_total is the full partition function. Each Z is matchgate-
+        Holant; Q is their projector.
+      * Inclusion-exclusion expansion: Q = sum_{S subseteq T} (-1)^|S|
+        * matchgate-eval(graph_S). Each evaluation is in-family; the
+        projector applies the signs and sums.
+      * Conditional expectations: Q = E[X | event] where the joint is
+        matchgate-Holant; evaluate two related Holant problems and
+        divide.
 
-    def evaluate(self, sub_evaluator):
-        raise NotImplementedError(
-            f"{self.name} is on the v0.2 roadmap."
+    Where :class:`LinearCombination` fixes the combiner to ``sum(coeff *
+    value)``, :class:`Projection` accepts ANY callable mapping a list of
+    sub-values to a single composed value -- ratios, products,
+    inclusion-exclusion signs, max/min, etc.
+
+    Example::
+
+        # Marginal as ratio of two matchgate-Holant evaluations.
+        proj = Projection(
+            name="P(matching uses edge e) = M(G with e forced) / M(G)",
+            sub_problems=[{"...": "G with e forced"}, {"...": "G"}],
+            projector=lambda values: values[0] / values[1],
         )
+        result = proj.evaluate(framework_evaluator)
+    """
+    name: str
+    sub_problems: List[Any]
+    projector: Callable[[List[Any]], Any]
+
+    @property
+    def combine(self):
+        """Projection.combine == projector. Provided for Composition
+        protocol conformance so a Projection can be passed where any
+        Composition is expected."""
+        return self.projector
+
+    def evaluate(self, sub_evaluator: Callable[[Any], Any]) -> Any:
+        """Apply ``sub_evaluator`` to each sub-problem in order; pass
+        the resulting list of values to ``self.projector`` to produce
+        the composed answer."""
+        if not callable(self.projector):
+            raise TypeError(
+                f"{self.name}: projector must be callable, got "
+                f"{type(self.projector).__name__}"
+            )
+        values = [sub_evaluator(p) for p in self.sub_problems]
+        return self.projector(values)
 
 
 class HolographicBasisPair:
@@ -588,6 +627,144 @@ class HolographicBasisPair:
             return best_T, best_r
         return None
 
+    def discover_common_basis(self,
+                                signatures: List[Sequence[float]],
+                                *,
+                                max_grid_steps: int = 16,
+                                success_tol: float = 1e-6,
+                                ) -> Optional[Tuple[Any, List["HolographicBasisResult"]]]:
+        r"""Find a SINGLE basis T that simultaneously puts every signature
+        in ``signatures`` into a Cai-Gorenstein Theorem-9 standard-basis
+        matchgate form. This is the multi-signature fragment of Cai-Lu's
+        SRP (Simultaneous Realisability Problem, Cai-Lu 2011 §4).
+
+        Strategy:
+
+          1. Realisability gate for each signature: if ANY signature
+             fails the order-2 recurrence in the standard basis, no
+             common basis can rescue it (Cai-Lu Theorem 2.5 applied
+             pointwise). Return ``None``.
+          2. Search the same canonical-bases-plus-parameterised-grid
+             space as :meth:`discover_basis`, but score each candidate
+             T as the SUM of matchgate-standard distances over all
+             signatures. The first T whose total distance falls below
+             ``success_tol`` wins.
+
+        Args:
+          signatures: list of symmetric signatures, each a sequence
+            ``[z_0, z_1, ..., z_n]``. Signatures may have different
+            arities (each has its own ``len(values) - 1``).
+          max_grid_steps: resolution of each axis in the grid search.
+          success_tol: a candidate basis T succeeds when the SUM of
+            matchgate-standard distances of T applied to each
+            signature is below this. Stricter than the single-
+            signature case because the failure modes compound.
+
+        Returns:
+          ``(T, results)`` where ``results`` is the list of
+          :class:`HolographicBasisResult` for each input signature
+          under the discovered T (in input order). Returns ``None`` if
+          no common basis is found within the configured budget.
+        """
+        import numpy as np
+        if not signatures:
+            raise ValueError("discover_common_basis: empty signature list")
+
+        # Step 1: per-signature realisability gate.
+        backup_T = self.basis_matrix
+        self.basis_matrix = np.eye(2)
+        try:
+            for sig in signatures:
+                check = self.transform_signature(sig)
+                if not check.is_realisable:
+                    return None
+        finally:
+            self.basis_matrix = backup_T
+
+        def _try(T):
+            """Apply T to every signature. Returns the list of results
+            (or None if any application raised)."""
+            saved = self.basis_matrix
+            self.basis_matrix = T
+            try:
+                results = []
+                for sig in signatures:
+                    results.append(self.transform_signature(sig))
+            except (ValueError, ZeroDivisionError):
+                return None
+            finally:
+                self.basis_matrix = saved
+            return results
+
+        def _total_distance(results) -> float:
+            return float(sum(self._matchgate_standard_distance(r.values)
+                              for r in results))
+
+        # Step 2: canonical candidates.
+        sqrt2_inv = 1.0 / np.sqrt(2.0)
+        canonical: List[Tuple[str, Any]] = [
+            ("identity", np.eye(2)),
+            ("hadamard", np.array([[1.0, 1.0], [1.0, -1.0]])),
+            ("swap",     np.array([[0.0, 1.0], [1.0, 0.0]])),
+            ("shear_+",  np.array([[1.0, 0.0], [1.0, 1.0]])),
+            ("shear_-",  np.array([[1.0, 0.0], [-1.0, 1.0]])),
+            ("shearT_+", np.array([[1.0, 1.0], [0.0, 1.0]])),
+            ("shearT_-", np.array([[1.0, -1.0], [0.0, 1.0]])),
+            ("rotation_4", np.array([[sqrt2_inv, -sqrt2_inv],
+                                       [sqrt2_inv,  sqrt2_inv]])),
+        ]
+        for _name, T in canonical:
+            results = _try(T)
+            if results is not None and _total_distance(results) < success_tol:
+                return T, results
+
+        # Step 3: parameterised grid + polish.
+        best_T, best_results, best_d = None, None, float("inf")
+        steps = np.linspace(-2.0, 2.0, max_grid_steps)
+        for t in steps:
+            for u in steps:
+                for v in steps:
+                    T = np.array([[1.0, t], [u, v]])
+                    if abs(np.linalg.det(T)) < 1e-12:
+                        continue
+                    results = _try(T)
+                    if results is None:
+                        continue
+                    d = _total_distance(results)
+                    if d < best_d:
+                        best_d, best_T, best_results = d, T, results
+                        if d < success_tol:
+                            return T, results
+
+        if best_T is not None and best_d > success_tol:
+            # Polish.
+            radius = 0.5
+            for _outer in range(4):
+                improved = False
+                for axis in range(3):
+                    for delta in (-radius, +radius):
+                        T_try = best_T.copy()
+                        if   axis == 0: T_try[0, 1] += delta
+                        elif axis == 1: T_try[1, 0] += delta
+                        else:           T_try[1, 1] += delta
+                        if abs(np.linalg.det(T_try)) < 1e-12:
+                            continue
+                        results = _try(T_try)
+                        if results is None:
+                            continue
+                        d = _total_distance(results)
+                        if d < best_d:
+                            best_d, best_T, best_results = d, T_try, results
+                            improved = True
+                if not improved:
+                    radius *= 0.5
+                if best_d < success_tol:
+                    return best_T, best_results
+
+        if best_T is not None and best_d < success_tol:
+            return best_T, best_results
+        return None
+
     def evaluate(self, sub_evaluator):
         """Apply the basis transformation to a Holant-style problem
         with a symmetric signature, and dispatch to the sub-evaluator
@@ -637,22 +814,74 @@ class HolographicBasisResult:
     basis_matrix: Any
 
 
+@dataclasses.dataclass
 class BranchSum:
-    """A sum over branches, each branch being an in-family evaluation
-    with a coefficient. The hybrid-dispatcher's amplitude-level
-    recombination is one instance of this pattern.
+    r"""A sum over named branches, each branch being an in-family
+    sub-problem with a (possibly complex) amplitude coefficient. The
+    combined result is ``sum(amplitude_i * sub_evaluator(branch_i))``.
 
-    Status: the circuit-specific form exists in
-    `free-fermion-quantum-simulation/hybrid-dispatcher/hybrid_dispatcher.py`.
-    Lifting to a general framework primitive is the v0.2 deliverable.
-    """
-    name = "BranchSum"
+    Where :class:`LinearCombination` treats coefficients as opaque
+    floats with no per-branch metadata, ``BranchSum`` keeps each branch
+    as a named ``Branch(name, amplitude, sub_problem)`` triple so the
+    trace records which physical branch contributed how much. This is
+    the abstract form of the amplitude-level recombination used in
+    ``free-fermion-quantum-simulation/hybrid-dispatcher`` -- there, the
+    branches are the two outcomes of a Clifford+T extraction at each
+    T-gate, with amplitudes (cos(pi/8), -i sin(pi/8)).
 
-    def evaluate(self, sub_evaluator):
-        raise NotImplementedError(
-            f"{self.name} is on the v0.2 roadmap (general form -- the circuit "
-            f"specialisation is in hybrid_dispatcher.py)."
+    Use case: a quantity Q decomposes as
+        Q = sum_i amp_i * sub_eval(branch_i)
+    where each branch is matchgate-Holant in-family and ``amp_i`` is a
+    branch-specific amplitude (possibly complex). The framework runs
+    each branch, multiplies by its amplitude, and sums.
+
+    Example::
+
+        bs = BranchSum(
+            name="Clifford+T recombination",
+            branches=[
+                BranchSum.Branch("|+>", 0.9239, problem_plus),
+                BranchSum.Branch("|->", 0.3827j, problem_minus),
+            ],
         )
+        Q = bs.evaluate(framework_evaluator)
+    """
+
+    @dataclasses.dataclass
+    class Branch:
+        """A single named branch with its amplitude and sub-problem."""
+        name: str
+        amplitude: Any
+        sub_problem: Any
+
+    name: str
+    branches: List["BranchSum.Branch"]
+
+    @property
+    def sub_problems(self) -> List[Any]:
+        """The in-family sub-problems, one per branch, in branch order.
+        Provided for Composition-protocol conformance."""
+        return [b.sub_problem for b in self.branches]
+
+    @property
+    def combine(self):
+        amps = [b.amplitude for b in self.branches]
+        def _combine(values: List[Any]) -> Any:
+            total = 0
+            for amp, val in zip(amps, values):
+                total = total + amp * val
+            return total
+        return _combine
+
+    def evaluate(self, sub_evaluator: Callable[[Any], Any]) -> Any:
+        """Evaluate each branch via ``sub_evaluator``, multiply by the
+        branch's amplitude, and sum. The amplitudes may be complex
+        (e.g., Clifford+T amplitudes); the sum's type follows."""
+        total = 0
+        for branch in self.branches:
+            val = sub_evaluator(branch.sub_problem)
+            total = total + branch.amplitude * val
+        return total
 
 
 __all__ = [

@@ -30,7 +30,7 @@ The full set of planned decompositions lives in
 admissibility-geometry/proposals/reductions_compositions_recursive_decomposition.md.
 """
 import dataclasses
-from typing import Any, Callable, List, Optional, Protocol, Set
+from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence, Set, Tuple
 
 
 # ---------------------------------------------------------------------------
@@ -452,40 +452,309 @@ def _build_multibag_plan(problem: Any, td: dict) -> "DecompositionPlan":
 
 
 class PlanarSeparator:
-    """Lipton-Tarjan planar-separator divide-and-conquer. A planar graph
-    of n vertices has a `O(sqrt(n))` separator that splits it into two
-    halves each of size at most `2n/3`. Recursively decomposing on
-    separators gives `O(n^1.5)` algorithms for some structural problems
-    on planar graphs that are otherwise cubic.
+    r"""Divide-and-conquer decomposition: split the graph into two halves
+    along a user-supplied vertex separator, recurse on each side,
+    combine via a sum over separator-vertex match patterns.
 
-    Status: not implemented in v0.1. The separator construction is
-    well-understood (Lipton-Tarjan 1979); wiring it into the framework
-    is the v0.2 deliverable.
+    The user supplies the partition ``(side_a, side_b, separator)``;
+    auto-discovery of the separator (Lipton-Tarjan 1979) is a deeper
+    deliverable. For PERFECT-MATCHING COUNT, the decomposition is:
+
+        PerfMatch(G) = sum over (S_to_A, S_to_B, S_pairs) of
+            (prod over (s,t) in S_pairs of w(s,t))
+            * PerfMatch(side_a sub-graph plus S_to_A)
+            * PerfMatch(side_b sub-graph plus S_to_B)
+
+    where the sum is over partitions of the separator vertices into:
+      - ``S_to_A``: matched to a vertex in ``side_a``,
+      - ``S_to_B``: matched to a vertex in ``side_b``,
+      - ``S_pairs``: pairs of separator vertices matched to each other.
+
+    For ``|S| = k``, the partition count is roughly ``O(3^k * k!)`` --
+    tractable for the small separators that planar graphs admit
+    (``|S| = O(sqrt(|V|))`` by Lipton-Tarjan).
+
+    Use::
+
+        decomp = PlanarSeparator(separator={2, 3},
+                                  side_a={0, 1}, side_b={4, 5})
+        plan = decomp.decompose(graph)
+        answer = plan.evaluate(brute_force_count_matchings_leaf)
     """
     name = "PlanarSeparator"
 
-    def decompose(self, problem):
-        raise NotImplementedError(
-            f"{self.name} is on the v0.2 roadmap."
+    def __init__(self, separator: Set, side_a: Set, side_b: Set):
+        """``side_a``, ``side_b``, ``separator`` must partition the
+        graph's vertex set (disjoint + covering)."""
+        self.separator = set(separator)
+        self.side_a    = set(side_a)
+        self.side_b    = set(side_b)
+
+    def decompose(self, problem: Any) -> "DecompositionPlan":
+        if not isinstance(problem, dict) or "vertices" not in problem:
+            raise ValueError(
+                f"{self.name}: expects a graph dict with 'vertices' and 'edges'"
+            )
+        verts   = set(problem["vertices"])
+        edges   = list(problem["edges"])
+        weights = dict(problem.get("weights", {}))
+        # Partition checks.
+        if self.side_a | self.side_b | self.separator != verts:
+            raise ValueError(
+                f"{self.name}: side_a + side_b + separator must cover all vertices"
+            )
+        if (self.side_a & self.side_b
+                or self.side_a & self.separator
+                or self.side_b & self.separator):
+            raise ValueError(
+                f"{self.name}: side_a, side_b, separator must be disjoint"
+            )
+        # Verify the separator is a real separator: no edge directly
+        # connects side_a to side_b without passing through the
+        # separator.
+        for (u, v) in edges:
+            if (u in self.side_a and v in self.side_b) \
+                    or (u in self.side_b and v in self.side_a):
+                raise ValueError(
+                    f"{self.name}: edge {(u, v)} crosses sides without "
+                    f"going through the separator -- not a valid separator"
+                )
+
+        def _w(u, v):
+            return float(weights.get((u, v), weights.get((v, u), 1.0)))
+
+        # Enumerate S vertices' partitions: each s is either in S_to_A,
+        # S_to_B, or paired with some other s'. Use a recursive
+        # enumeration.
+        sep_list = list(self.separator)
+        partitions: List[Any] = []                       # (S_to_A, S_to_B, S_pairs)
+        s_edges = [(u, v) for (u, v) in edges
+                    if u in self.separator and v in self.separator]
+
+        def _enumerate(idx: int, assigned: dict, pairs: list):
+            if idx == len(sep_list):
+                s_to_a = {v for v, role in assigned.items() if role == "A"}
+                s_to_b = {v for v, role in assigned.items() if role == "B"}
+                partitions.append((s_to_a, s_to_b, list(pairs)))
+                return
+            v = sep_list[idx]
+            if v in assigned:
+                _enumerate(idx + 1, assigned, pairs)
+                return
+            # Option 1: assign to A.
+            assigned[v] = "A"
+            _enumerate(idx + 1, assigned, pairs)
+            del assigned[v]
+            # Option 2: assign to B.
+            assigned[v] = "B"
+            _enumerate(idx + 1, assigned, pairs)
+            del assigned[v]
+            # Option 3: pair with a later unassigned vertex via an existing S-S edge.
+            for (u, w) in s_edges:
+                if u == v and w not in assigned and sep_list.index(w) > idx:
+                    other = w
+                elif w == v and u not in assigned and sep_list.index(u) > idx:
+                    other = u
+                else:
+                    continue
+                assigned[v]     = "P"
+                assigned[other] = "P"
+                pairs.append((v, other))
+                _enumerate(idx + 1, assigned, pairs)
+                pairs.pop()
+                del assigned[v]
+                del assigned[other]
+
+        _enumerate(0, {}, [])
+
+        # Build a plan child per partition. Each child has TWO leaves
+        # (A-side sub-graph, B-side sub-graph); the child combine
+        # multiplies them by the S-pairs weight.
+        plan_children: List["DecompositionPlan"] = []
+        for (s_to_a, s_to_b, s_pairs) in partitions:
+            pair_weight = 1.0
+            for (u, v) in s_pairs:
+                pair_weight *= _w(u, v)
+            a_verts = self.side_a | s_to_a
+            b_verts = self.side_b | s_to_b
+            a_edges = [(u, v) for (u, v) in edges
+                        if u in a_verts and v in a_verts
+                        and not (u in self.separator and v in self.separator)]
+            b_edges = [(u, v) for (u, v) in edges
+                        if u in b_verts and v in b_verts
+                        and not (u in self.separator and v in self.separator)]
+            sub_a = {
+                "vertices": list(a_verts),
+                "edges":    a_edges,
+                "weights":  {e: _w(*e) for e in a_edges},
+            }
+            sub_b = {
+                "vertices": list(b_verts),
+                "edges":    b_edges,
+                "weights":  {e: _w(*e) for e in b_edges},
+            }
+            def _make_combine(pw):
+                def _combine(values):
+                    return pw * values[0] * values[1]
+                return _combine
+            plan_children.append(DecompositionPlan(
+                problem=None,
+                children=[
+                    DecompositionPlan(problem=sub_a, label="A-side"),
+                    DecompositionPlan(problem=sub_b, label="B-side"),
+                ],
+                combine=_make_combine(pair_weight),
+                label=(f"pattern[|S_to_A|={len(s_to_a)}, "
+                        f"|S_to_B|={len(s_to_b)}, |pairs|={len(s_pairs)}]"),
+            ))
+
+        return DecompositionPlan(
+            problem=problem,
+            children=plan_children,
+            combine=lambda vs: sum(vs),
+            label=f"PlanarSeparator(|S|={len(self.separator)})",
+            notes=f"enumerated {len(partitions)} separator partition patterns",
         )
 
 
 class RecursiveCircuitCut:
-    """The hybrid-dispatcher's circuit-cutting pattern, lifted to
-    arbitrary N-way splits and recursive sub-cuts. At each cut, the
-    framework chooses the cut that best separates the structural shape;
-    recursive sub-cuts handle pieces that themselves don't yet fit.
+    r"""Cut a circuit / graph along a set of wires (edges) and recurse
+    by enumerating each wire's two states.
 
-    Status: the binary form (cut into two halves) exists for circuits
-    in `hybrid-dispatcher/hybrid_dispatcher.py`. Lifting to a recursive
-    N-way primitive is the v0.2 deliverable.
+    For PERFECT-MATCHING COUNT, the "two states" of a cut edge are
+    "in the matching" (forced; remove both endpoints) and "out of the
+    matching" (forced; remove the edge). The decomposition is the
+    standard Tutte / Lovasz-Plummer identity applied independently to
+    each cut edge:
+
+        M(G) = sum over T subseteq cut of
+                  (prod_{e in T} w(e)) * M(G with T's endpoints removed
+                                            and (cut \ T) deleted)
+
+    For ``|cut| = k``, this enumerates ``2^k`` sub-problems -- the same
+    branching cost as :class:`structural_computing.HybridDecomposition`,
+    but presented as a decomposition tree rather than a reduction
+    (so it composes naturally with the rest of the framework's
+    decomposition layer: ``DecompositionPlan`` carries the tree,
+    ``leaf_evaluator`` evaluates leaves, ``combine`` sums them).
+
+    Recursive cuts: the caller may chain RCC objects on the resulting
+    sub-problems if a single cut doesn't fully reduce the graph;
+    sequential cuts give ``2^(k_1 + k_2 + ...)`` leaves overall,
+    matching the cost of a single ``HybridDecomposition`` with the
+    union of all cut edges. The advantage is that intermediate plans
+    are inspectable and can be combined / re-evaluated independently.
+
+    Use::
+
+        rcc = RecursiveCircuitCut(cut=[(0, 2), (1, 3)])
+        plan = rcc.decompose(K_4_graph)
+        # plan has 2^2 = 4 leaves, each a sub-graph with 0/1/2 of the
+        # cut edges forced in or out of the matching.
+        answer = plan.evaluate(brute_force_count_matchings_leaf)
     """
     name = "RecursiveCircuitCut"
 
-    def decompose(self, problem):
-        raise NotImplementedError(
-            f"{self.name} is on the v0.2 roadmap (the binary cut "
-            f"specialisation is in hybrid_dispatcher.py)."
+    def __init__(self, cut: Sequence[Tuple]):
+        """``cut`` is the iterable of edges to cut. Each is a tuple
+        ``(u, v)``."""
+        self.cut: List[Tuple] = [tuple(e) for e in cut]
+
+    def decompose(self, problem: Any) -> "DecompositionPlan":
+        if not isinstance(problem, dict) or "vertices" not in problem:
+            raise ValueError(
+                f"{self.name}: expects a graph dict with 'vertices' and 'edges'"
+            )
+        vertices = list(problem["vertices"])
+        edges    = list(problem["edges"])
+        weights  = dict(problem.get("weights", {}))
+
+        def _w(u, v):
+            return float(weights.get((u, v), weights.get((v, u), 1.0)))
+
+        # Validate the cut edges are in the graph.
+        def _key(e):
+            (u, v) = e
+            return (u, v) if (str(u), str(v)) <= (str(v), str(u)) else (v, u)
+        edge_keys = {_key(e) for e in edges}
+        cut_keys = [_key(e) for e in self.cut]
+        for (orig, key) in zip(self.cut, cut_keys):
+            if key not in edge_keys:
+                raise ValueError(
+                    f"{self.name}: cut edge {orig} is not present in the graph"
+                )
+
+        # Enumerate subsets T of the cut.
+        plan_children: List["DecompositionPlan"] = []
+        n_cut = len(self.cut)
+        for mask in range(2 ** n_cut):
+            forced_in: List[Tuple] = []
+            forced_out: List[Tuple] = []
+            for i in range(n_cut):
+                if (mask >> i) & 1:
+                    forced_in.append(self.cut[i])
+                else:
+                    forced_out.append(self.cut[i])
+            # Check forced-in subset is a valid partial matching
+            # (no shared vertex among the forced-in edges).
+            seen = set()
+            valid = True
+            for (u, v) in forced_in:
+                if u in seen or v in seen:
+                    valid = False
+                    break
+                seen.update((u, v))
+            if not valid:
+                continue
+            # Build sub-graph: remove forced-in endpoints; delete forced-
+            # out edges; keep everything else.
+            forced_out_keys = {_key(e) for e in forced_out}
+            removed_vertices = seen
+            sub_vertices = [v for v in vertices if v not in removed_vertices]
+            sub_edges = []
+            sub_weights: Dict[Tuple, float] = {}
+            for e in edges:
+                if _key(e) in forced_out_keys:
+                    continue
+                if e[0] in removed_vertices or e[1] in removed_vertices:
+                    continue
+                sub_edges.append(e)
+                sub_weights[e] = _w(*e)
+            # Pre-multiply the forced-in edges' weights into the leaf
+            # combine function so the leaf evaluator just sees a clean
+            # sub-graph.
+            forced_in_weight = 1.0
+            for (u, v) in forced_in:
+                forced_in_weight *= _w(u, v)
+
+            sub_problem = {
+                "vertices": sub_vertices,
+                "edges": sub_edges,
+                "weights": sub_weights,
+            }
+            def _make_combine(w):
+                def _combine(values):
+                    return w * (values[0] if values else 1)
+                return _combine
+            plan_children.append(DecompositionPlan(
+                problem=None,
+                children=[
+                    DecompositionPlan(problem=sub_problem, label="sub-graph"),
+                ],
+                combine=_make_combine(forced_in_weight),
+                label=(f"mask=0b{mask:0{n_cut}b}, "
+                        f"forced_in={forced_in}, forced_out={forced_out}, "
+                        f"weight={forced_in_weight:g}"),
+            ))
+
+        return DecompositionPlan(
+            problem=problem,
+            children=plan_children,
+            combine=lambda vs: sum(vs),
+            label=f"RecursiveCircuitCut(|cut|={n_cut})",
+            notes=(f"enumerated {len(plan_children)} valid sub-problems "
+                   f"(of 2^{n_cut} = {2**n_cut} subsets; invalid forced-in "
+                   f"patterns -- shared endpoints -- pruned)"),
         )
 
 

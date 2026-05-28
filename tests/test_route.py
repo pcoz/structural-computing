@@ -161,7 +161,42 @@ def test_route_with_calibration_adds_predicted_seconds():
         assert r.meters["cost_source"] == "calibrated"
         # Power law: 1e-7 * 10^3 = 1e-4 seconds (problem size = 10 for T2)
         assert abs(r.meters["predicted_seconds"] - 1e-4) < 1e-9
-        # cost field is still log2(ops) heuristic for backward compat.
-        assert math.isfinite(r.cost)
+        # Cost is now log2(predicted_seconds), not log2(ops).
+        assert r.meters["cost_unit"] == "log2_seconds"
+        assert abs(r.cost - math.log2(1e-4)) < 1e-9
+    finally:
+        clear_calibration()
+
+
+def test_route_heuristic_cost_unit_is_log2_ops():
+    """Without calibration, the cost field is the log2(ops) heuristic
+    and cost_unit is tagged as 'log2_ops' so downstream consumers can
+    tell the units."""
+    from structural_computing import clear_calibration
+    clear_calibration()
+    r = route(_cls("T2", n_vertices=8))
+    assert r.meters["cost_unit"] == "log2_ops"
+    assert r.meters["cost_source"] == "heuristic"
+    # Heuristic for T2 with n_vertices=8: 3*log2(16) + 1.5 = 13.5.
+    assert abs(r.cost - (3 * math.log2(16) + 1.5)) < 1e-9
+
+
+def test_route_calibrated_cost_is_log2_seconds_t4():
+    """The same unit-switch happens for T4 (and all in-family tiers)."""
+    from structural_computing import apply_calibration, clear_calibration
+    clear_calibration()
+    apply_calibration({
+        ("T4", "matching_count"): {
+            "model": "exponential", "params": (1e-6, math.log(2)), "rms": 0.1,
+        },
+    })
+    try:
+        r = route(_cls("T4", n_vertices=10, genus=1),
+                   question="matching_count")
+        # time = 1e-6 * 2^10 = 1.024e-3
+        expected_seconds = 1e-6 * (2 ** 10)
+        assert abs(r.meters["predicted_seconds"] - expected_seconds) < 1e-9
+        assert r.meters["cost_unit"] == "log2_seconds"
+        assert abs(r.cost - math.log2(expected_seconds)) < 1e-9
     finally:
         clear_calibration()

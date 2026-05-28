@@ -194,6 +194,58 @@ def test_discover_basis_finds_basis_for_nae3():
 
 
 # ---------------------------------------------------------------------------
+# Multi-signature SRP (v0.3, Cai-Lu 2011 §4)
+# ---------------------------------------------------------------------------
+
+def test_discover_common_basis_finds_hadamard_for_both_hadamard_friendly():
+    """Two signatures both solved by Hadamard: discover_common_basis
+    returns the shared T = Hadamard."""
+    h = HolographicBasisPair()
+    sigs = [[1, 0, 0, 1], [0, 1, 1, 0]]                  # 3-AND + NAE-3
+    discovery = h.discover_common_basis(sigs)
+    assert discovery is not None
+    T, results = discovery
+    assert len(results) == 2
+    for r in results:
+        d = h._matchgate_standard_distance(r.values)
+        assert d < 1e-6
+
+
+def test_discover_common_basis_identity_when_both_already_standard():
+    """Two signatures both already in matchgate-standard form: the
+    identity is a valid common basis."""
+    h = HolographicBasisPair()
+    sigs = [[1, 0, 1, 0, 1], [2, 0, 2, 0, 2]]
+    discovery = h.discover_common_basis(sigs)
+    assert discovery is not None
+    T, _results = discovery
+    np.testing.assert_allclose(T, np.eye(2))
+
+
+def test_discover_common_basis_returns_none_for_conflicting_bases():
+    """Two signatures requiring incompatible bases: discover_common_basis
+    returns None."""
+    h = HolographicBasisPair()
+    # Already-standard arity-4 vs Hadamard-needing arity-3.
+    sigs = [[2, 0, 2, 0, 2], [1, 0, 0, 1]]
+    assert h.discover_common_basis(sigs) is None
+
+
+def test_discover_common_basis_returns_none_when_any_signature_non_realisable():
+    """If even ONE signature fails the order-2 recurrence, no common
+    basis can rescue the set (Cai-Lu Thm 2.5 applied pointwise)."""
+    h = HolographicBasisPair()
+    sigs = [[1, 0, 0, 1], [1, 0, 1, 0, 2]]      # second is rank-3
+    assert h.discover_common_basis(sigs) is None
+
+
+def test_discover_common_basis_empty_list_raises():
+    h = HolographicBasisPair()
+    with pytest.raises(ValueError):
+        h.discover_common_basis([])
+
+
+# ---------------------------------------------------------------------------
 # Non-symmetric (general-tensor) basis transformation (v0.3)
 # ---------------------------------------------------------------------------
 
@@ -289,13 +341,59 @@ def test_holographic_basis_pair_wrong_shape_raises():
 # Sketches (should remain NotImplementedError until v0.2)
 # ---------------------------------------------------------------------------
 
-def test_projection_is_a_v02_sketch():
-    p = Projection()
-    with pytest.raises(NotImplementedError):
-        p.evaluate(lambda p: 0)
+def test_projection_ratio():
+    """Projection as a marginal ratio of two sub-evaluations."""
+    p = Projection(
+        name="ratio",
+        sub_problems=["num", "den"],
+        projector=lambda vs: vs[0] / vs[1],
+    )
+    eval_fn = lambda x: {"num": 30, "den": 5}[x]
+    assert p.evaluate(eval_fn) == 6.0
 
 
-def test_branch_sum_is_a_v02_sketch():
-    b = BranchSum()
-    with pytest.raises(NotImplementedError):
-        b.evaluate(lambda p: 0)
+def test_projection_inclusion_exclusion():
+    """Projection as an inclusion-exclusion sum."""
+    p = Projection(
+        name="incl-excl",
+        sub_problems=["A", "B", "AB"],
+        projector=lambda vs: vs[0] + vs[1] - vs[2],
+    )
+    eval_fn = lambda x: {"A": 10, "B": 7, "AB": 3}[x]
+    assert p.evaluate(eval_fn) == 14
+
+
+def test_projection_non_callable_projector_raises():
+    p = Projection(name="bad", sub_problems=[1, 2], projector="not callable")
+    with pytest.raises(TypeError):
+        p.evaluate(lambda x: x)
+
+
+def test_branch_sum_real_amplitudes():
+    """BranchSum sums (amplitude * sub_eval) over named branches."""
+    bs = BranchSum(name="binary tree", branches=[
+        BranchSum.Branch("left",  0.5, "L"),
+        BranchSum.Branch("right", 0.5, "R"),
+    ])
+    eval_fn = lambda x: {"L": 10, "R": 30}[x]
+    assert bs.evaluate(eval_fn) == 20.0          # 0.5*10 + 0.5*30
+
+
+def test_branch_sum_complex_amplitudes():
+    """BranchSum supports complex amplitudes (Clifford+T pattern)."""
+    bs = BranchSum(name="C+T branch", branches=[
+        BranchSum.Branch("|+>", 1.0 + 0j, "P"),
+        BranchSum.Branch("|->", 0.0 + 1j, "M"),
+    ])
+    eval_fn = lambda x: {"P": 2, "M": 3}[x]
+    result = bs.evaluate(eval_fn)
+    assert result == 2.0 + 3.0j
+
+
+def test_branch_sum_sub_problems_and_combine_match_protocol():
+    bs = BranchSum(name="x", branches=[
+        BranchSum.Branch("a", 1, "X"),
+        BranchSum.Branch("b", 2, "Y"),
+    ])
+    assert bs.sub_problems == ["X", "Y"]
+    assert bs.combine([10, 20]) == 1 * 10 + 2 * 20

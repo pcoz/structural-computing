@@ -123,44 +123,73 @@ def _maybe_calibrated(tier: str, question: Optional[str],
     return predict_seconds(tier, question, n=n)
 
 
+def _calibrated_cost(predicted_seconds: float) -> float:
+    """Convert a predicted-seconds value to a log2(seconds) cost.
+    Negative-time bugs would shift the cost arbitrarily downward, so we
+    floor predicted_seconds at a tiny positive value before taking
+    log2; this also avoids log2(0) for instant operations."""
+    floored = max(float(predicted_seconds), 1e-15)
+    return math.log2(floored)
+
+
 def route(classification: Classification,
            question: Optional[str] = None) -> Route:
-    """Map a `Classification` to a `Route`. Cost is reported in log2(ops)
-    units (so a value of 8.6 means ~2^8.6 = ~388 operations). Advised tiers
-    return cost = +inf with the reason in the meters.
+    """Map a `Classification` to a `Route`.
 
-    Optional ``question`` argument: when supplied AND a calibration
-    entry has been loaded (via
-    :func:`structural_computing.apply_calibration`) for the
-    ``(tier, question)`` pair, the returned Route's meters also carry
-    ``predicted_seconds`` (a wall-clock estimate on the calibrated
-    machine) plus ``cost_source = "calibrated"``. The ``cost`` field
-    itself stays in log2(ops) for backward-compatibility; the
-    calibrated number is informational, surfaced in workflow traces
-    and available to callers via ``route.meters["predicted_seconds"]``.
+    Cost-field semantics:
+      * If a calibration entry has been loaded for ``(tier, question)``
+        via :func:`structural_computing.apply_calibration`, the cost
+        is reported in ``log2(predicted_seconds)`` and the meter
+        ``cost_unit = "log2_seconds"``.
+      * Otherwise, the cost is the existing heuristic ``log2(ops)``
+        estimate and the meter ``cost_unit = "log2_ops"``.
+      * Advised tiers always return ``cost = +inf`` (regardless of
+        calibration) with the reason in the meters.
 
-    When ``question`` is omitted OR no calibration is loaded, the
-    meters carry ``cost_source = "heuristic"`` and ``predicted_seconds``
-    is absent.
+    The meters always carry ``cost_source`` (``"calibrated"`` or
+    ``"heuristic"``) and ``cost_unit`` so consumers know the unit
+    semantically without inferring from numeric magnitude. When
+    calibrated, ``predicted_seconds`` is also surfaced for callers
+    that want the raw wall-clock estimate.
+
+    Mixing units in cross-tier comparisons: be careful. ``log2_seconds``
+    and ``log2_ops`` differ by ``log2(ops_per_second)`` which is roughly
+    constant for a given machine but not exactly so. If you need
+    apples-to-apples comparisons across tiers, either (a) calibrate
+    every tier in your routing set, or (b) consume the
+    ``predicted_seconds`` meter directly and avoid the ``cost`` field.
     """
     tier = classification.tier
     m: Dict[str, Any] = dict(classification.meters)
     cal_seconds = _maybe_calibrated(tier, question, m)
-    cost_meta = (
-        {"cost_source": "calibrated", "predicted_seconds": cal_seconds,
-         "calibration_question": question}
-        if cal_seconds is not None
-        else {"cost_source": "heuristic"}
-    )
+    if cal_seconds is not None:
+        cost_meta = {
+            "cost_source":           "calibrated",
+            "cost_unit":             "log2_seconds",
+            "predicted_seconds":     cal_seconds,
+            "calibration_question":  question,
+        }
+        # When calibrated AND the predicted cost is finite/positive,
+        # the cost field reports log2(predicted_seconds). For zero or
+        # negative predicted-seconds (degenerate calibration entries),
+        # the floor in _calibrated_cost prevents log2(0).
+        _CALIBRATED_COST = _calibrated_cost(cal_seconds)
+    else:
+        cost_meta = {
+            "cost_source":  "heuristic",
+            "cost_unit":    "log2_ops",
+        }
+        _CALIBRATED_COST = None                          # placeholder
 
     if tier == "T0":
         nv = int(m.get("n_variables", 1))
         # GF(2) Gaussian elimination is O(n^3) on n variables; in log2 ops:
         # 3 * log2(n) + small overhead. The +1 in nv+1 avoids log2(0) for
         # zero-variable degenerate cases.
+        heuristic = _poly_cost(nv + 1, degree=_POLY_DEGREE_T0_T1, overhead=_OVERHEAD_T0)
         return Route(
             member="ch-form",
-            cost=_poly_cost(nv + 1, degree=_POLY_DEGREE_T0_T1, overhead=_OVERHEAD_T0),
+            cost=(_CALIBRATED_COST if _CALIBRATED_COST is not None else heuristic),
             meters={**m, "model": "affine-quadratic support directions",
                     "cost_model": "3*log2(n) + 0.5 (CH-form, Gauss-elim)",
                     **cost_meta},
@@ -172,9 +201,10 @@ def route(classification: Classification,
         nq = int(m.get("n_quadratic", 0))
         # T1 = T0 + post-selecting Z measurements; same asymptotic but
         # slightly higher constant overhead.
+        heuristic = _poly_cost(nl + nq + 1, degree=_POLY_DEGREE_T0_T1, overhead=_OVERHEAD_T1)
         return Route(
             member="ch-form",
-            cost=_poly_cost(nl + nq + 1, degree=_POLY_DEGREE_T0_T1, overhead=_OVERHEAD_T1),
+            cost=(_CALIBRATED_COST if _CALIBRATED_COST is not None else heuristic),
             meters={**m, "model": "affine-quadratic with post-selecting Z measurements",
                     "cost_model": "3*log2(n) + 1.0 (CH-form + post-selection)",
                     **cost_meta},
@@ -187,9 +217,10 @@ def route(classification: Classification,
         # `2 * nv` to capture the matrix-size factor that the Kasteleyn
         # orientation introduces (the antisymmetric matrix has 2*|V| rows
         # after the orientation step).
+        heuristic = _poly_cost(2 * nv, degree=_POLY_DEGREE_T2_T3_T4, overhead=_OVERHEAD_T2)
         return Route(
             member="free-fermion",
-            cost=_poly_cost(2 * nv, degree=_POLY_DEGREE_T2_T3_T4, overhead=_OVERHEAD_T2),
+            cost=(_CALIBRATED_COST if _CALIBRATED_COST is not None else heuristic),
             meters={**m, "model": "FKT planar Pfaffian",
                     "cost_model": "3*log2(2|V|) + 1.5 (Pfaffian)",
                     **cost_meta},
@@ -202,10 +233,12 @@ def route(classification: Classification,
         if rank <= 2:
             # Basis-aware rank-2 decomposition runs the Pfaffian once per
             # parity branch (up to 2 branches), so cost adds log2(max(1, rank)).
+            heuristic = (_poly_cost(2 * ar, degree=_POLY_DEGREE_T2_T3_T4,
+                                     overhead=_OVERHEAD_T3)
+                          + math.log2(max(1, rank)))
             return Route(
                 member="free-fermion",
-                cost=(_poly_cost(2 * ar, degree=_POLY_DEGREE_T2_T3_T4, overhead=_OVERHEAD_T3)
-                       + math.log2(max(1, rank))),
+                cost=(_CALIBRATED_COST if _CALIBRATED_COST is not None else heuristic),
                 meters={**m, "model": f"FKT + basis-aware rank-{rank} parity-split decomposition",
                         "cost_model": f"3*log2(2*arity) + 1.5 + log2({rank}) (parity-split)",
                         **cost_meta},
@@ -224,10 +257,12 @@ def route(classification: Classification,
         # Galluccio-Loebl genus-g formula: O(4^g * Pfaffian) per spin
         # structure. In log2 that's g * log2(4) added to the planar
         # Pfaffian cost.
+        heuristic = (g * _GENUS_FACTOR
+                      + _poly_cost(2 * nv, degree=_POLY_DEGREE_T2_T3_T4,
+                                    overhead=_OVERHEAD_T4))
         return Route(
             member="free-fermion",
-            cost=(g * _GENUS_FACTOR
-                   + _poly_cost(2 * nv, degree=_POLY_DEGREE_T2_T3_T4, overhead=_OVERHEAD_T4)),
+            cost=(_CALIBRATED_COST if _CALIBRATED_COST is not None else heuristic),
             meters={**m, "model": f"genus-{g} Kasteleyn (Klein arc, 4^g scaling)",
                     "cost_model": f"{g}*log2(4) + 3*log2(2|V|) + 1.5 (genus-{g} Kasteleyn)",
                     **cost_meta},
