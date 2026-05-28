@@ -176,10 +176,33 @@ def test_high_degree_vertex_split_is_a_v02_sketch():
         r.apply({"vertices": [], "edges": []})
 
 
-def test_rationalise_weights_is_a_v02_sketch():
+def test_rationalise_weights_real_to_integer():
+    """RationaliseWeights converts real-valued edge weights to integer
+    weights at the requested decimal precision."""
+    r = RationaliseWeights(precision=4, matching_size=2)
+    graph = {
+        "vertices": [0, 1, 2, 3],
+        "edges": [(0, 1), (1, 2), (2, 3), (3, 0)],
+        "weights": {(0, 1): 0.7, (1, 2): 0.3, (2, 3): 0.5, (3, 0): 0.9},
+    }
+    result = r.apply(graph)
+    expected = {(0, 1): 7000, (1, 2): 3000, (2, 3): 5000, (3, 0): 9000}
+    assert result.problem["weights"] == expected
+    # The inverse divides by 10^(precision * matching_size) = 10^8.
+    assert abs(result.inverse(12345678) - 0.12345678) < 1e-9
+
+
+def test_rationalise_weights_honest_stop_on_integer_weights():
+    """Already-integer weights mean the reduction has nothing to do."""
     r = RationaliseWeights()
-    with pytest.raises(NotImplementedError):
-        r.apply({})
+    graph_int = {"weights": {(0, 1): 1, (1, 2): 2}}
+    with pytest.raises(ReductionNotApplicable):
+        r.apply(graph_int)
+
+
+def test_rationalise_weights_negative_precision_raises():
+    with pytest.raises(ValueError):
+        RationaliseWeights(precision=-1)
 
 
 # ---------------------------------------------------------------------------

@@ -623,26 +623,96 @@ class HybridDecomposition:
 
 
 class RationaliseWeights:
-    """Convert real-valued edge / vertex weights to rational form,
-    then to GF(p) for an appropriate prime p, so the resulting
-    constraint set is GF(p)-affine and the classifier emits T0 / T1.
+    r"""Convert real-valued edge weights into rationalised integer
+    weights so the residual problem can be evaluated exactly in integer
+    arithmetic (avoiding floating-point drift in the Pfaffian / matching-
+    sum computation).
 
-    For risk / reliability problems with continuous failure probabilities,
-    rationalising at a chosen precision lets the framework evaluate
-    exactly while documenting the discretisation error. The alternative
-    is the honest-stop on T7 ("real-valued, advised").
+    The construction: pick a precision `p`; replace each edge weight `w`
+    with the integer `round(w * 10^p)`. The weighted matching sum on
+    the rationalised graph differs from the original by a known
+    multiplicative factor:
 
-    Status: not implemented in v0.1.
+        sum_M (prod_{e in M} round(w_e * 10^p))
+            = 10^(p * matching_size) * sum_M (prod_{e in M} w_e) + O(discretisation_error)
+
+    The inverse function divides by `10^(p * matching_size)` to recover
+    an approximation to the original sum. The discretisation error is
+    bounded by `O(10^{-p} * |E|)` times the largest matching contribution.
+
+    For RISK and RELIABILITY problems with continuous failure probabilities,
+    this lets the framework's exact integer machinery do the work while
+    the user explicitly chooses the discretisation precision (and bounds
+    the resulting error).
+
+    v0.2 ships the construction for **perfect-matching weighted sum**
+    on graphs with edge weights. Generalisation to vertex weights and
+    other signature types is straightforward extension; not in this cut.
+
+    Use:
+
+        # Original graph with real-valued weights.
+        graph = {
+            "vertices": [...],
+            "edges": [...],
+            "weights": {(u, v): 0.7, (u, w): 0.3, ...},   # real-valued
+        }
+        reducer = RationaliseWeights(precision=6)        # 6 decimal places
+        result = reducer.apply(graph)
+        # result.problem now has integer weights = round(w * 10^6).
+        # result.inverse(integer_sum) divides out the 10^(6 * matching_size)
+        # factor and returns the approximate real-valued sum.
     """
     name = "RationaliseWeights"
 
+    def __init__(self, precision: int = 6, matching_size: Optional[int] = None):
+        """Construct with `precision` (number of decimal digits to keep)
+        and `matching_size` (number of edges in each matching being summed
+        -- for perfect matchings on `n` vertices this is `n // 2`).
+        `matching_size` can be `None`; in that case the inverse function
+        leaves the integer sum unscaled (the caller does the scaling)."""
+        if precision < 0:
+            raise ValueError(f"precision must be >= 0, got {precision}")
+        self.precision = precision
+        self.matching_size = matching_size
+
     def applies_to(self, problem: Any) -> bool:
-        return False
+        """True iff `problem` is a graph dict with a `weights` field
+        mapping edges to floats."""
+        if not isinstance(problem, dict):
+            return False
+        if "weights" not in problem:
+            return False
+        # Skip if every weight is already integer.
+        weights = problem["weights"]
+        if not isinstance(weights, dict) or not weights:
+            return False
+        return any(not isinstance(w, int) for w in weights.values())
 
     def apply(self, problem: Any) -> ReductionResult:
-        raise NotImplementedError(
-            f"{self.name} is on the v0.2 roadmap. See "
-            f"admissibility-geometry/proposals/reductions_compositions_recursive_decomposition.md"
+        if not self.applies_to(problem):
+            raise ReductionNotApplicable(
+                f"{self.name}: expects a graph dict with float weights in 'weights'"
+            )
+        scale = 10 ** self.precision
+        new_weights = {edge: int(round(w * scale))
+                        for edge, w in problem["weights"].items()}
+        new_problem = {**problem, "weights": new_weights}
+        # Build the inverse function: divide the integer sum by 10^(precision * matching_size).
+        if self.matching_size is None:
+            divisor = 1.0
+        else:
+            divisor = float(scale ** self.matching_size)
+
+        def inverse(int_sum: float) -> float:
+            return int_sum / divisor
+
+        return ReductionResult(
+            problem=new_problem,
+            cost_overhead=0.0,
+            inverse=inverse,
+            notes=(f"weights scaled by 10^{self.precision}; "
+                   f"discretisation error bounded by O(10^{-self.precision} * |E|)"),
         )
 
 

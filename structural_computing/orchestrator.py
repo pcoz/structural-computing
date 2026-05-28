@@ -56,6 +56,7 @@ from .transform import (
     ReductionNotApplicable,
     HybridDecomposition,
     NormaliseGraphFormat,
+    RationaliseWeights,
 )
 from .compose import Composition, CompositionPlan, LinearCombination
 from .decompose import (
@@ -66,6 +67,7 @@ from .decompose import (
 )
 from .verifier import (
     brute_force_count_matchings,
+    brute_force_weighted_matching_sum,
     enumerate_satisfying_assignments,
     satisfies_gf2_affine,
 )
@@ -201,6 +203,24 @@ def _matching_count_leaf(problem: Any, question: str) -> int:
     if isinstance(problem, dict) and "vertices" in problem:
         return brute_force_count_matchings(problem["vertices"], problem["edges"])
     raise ValueError(f"matching_count_leaf expects a graph dict; got {type(problem).__name__}")
+
+
+def _weighted_matching_sum_leaf(problem: Any, question: str) -> float:
+    """weighted_matching_sum on a graph (T2 or T4): the sum over perfect
+    matchings M of (product of weight(e) for e in M). Brute force at
+    small n. Requires a `weights` field on the problem dict mapping
+    edges -> real (or integer) weights; missing edges default to 1.0."""
+    if not isinstance(problem, dict) or "vertices" not in problem:
+        raise ValueError(
+            f"weighted_matching_sum_leaf expects a graph dict; got {type(problem).__name__}"
+        )
+    if "weights" not in problem:
+        raise ValueError(
+            "weighted_matching_sum_leaf requires a 'weights' field on the problem"
+        )
+    return brute_force_weighted_matching_sum(
+        problem["vertices"], problem["edges"], problem["weights"],
+    )
 
 
 def _witness_leaf(problem: Any, question: str) -> List[Tuple[Any, Any]]:
@@ -375,6 +395,8 @@ DEFAULT_LEAF_REGISTRY: Dict[Tuple[str, str], LeafEvaluator] = {
     # Graph questions
     ("T2", "matching_count"):            _matching_count_leaf,
     ("T4", "matching_count"):            _matching_count_leaf,
+    ("T2", "weighted_matching_sum"):     _weighted_matching_sum_leaf,
+    ("T4", "weighted_matching_sum"):     _weighted_matching_sum_leaf,
     ("T2", "witness"):                   _witness_leaf,
     ("T4", "witness"):                   _witness_leaf,
     ("T2", "single_points_of_failure"):  _spofs_leaf,
@@ -462,6 +484,10 @@ class Orchestrator:
 
           1. **Normalise** -- coerce edge-list / adjacency-dict inputs into
              a canonical rotation-system graph dict.
+          1.5. **Rationalise weights** -- if `hints["rationalise_precision"]`
+             is supplied and the problem has real-valued `weights`, scale
+             them to integers and remember the inverse so the final answer
+             is divided by `10^(precision * matching_size)`.
           2. **Classify** -- emit the structural Classification (tier,
              in_family flag, meters, reasoning).
           3. **Direct dispatch** -- if a leaf evaluator for (tier, question)
@@ -501,6 +527,10 @@ class Orchestrator:
         hints = hints or {}
         workflow_trace: List[WorkflowStep] = []
         reductions_applied: List[str] = []
+        # post_inverse: callable to apply to the final answer (used by
+        # RationaliseWeights to undo the 10^(precision * matching_size)
+        # scaling). None when no post-processing is needed.
+        post_inverse: Optional[Callable[[Any], Any]] = None
 
         # ----- Phase 1: Normalise --------------------------------------
         normaliser = NormaliseGraphFormat()
@@ -519,6 +549,44 @@ class Orchestrator:
                 outcome="skipped",
                 detail="input already in canonical form (or unsupported type)",
             ))
+
+        # ----- Phase 1.5: Rationalise weights (hint-driven) -----------
+        # If the user supplied `rationalise_precision` AND the problem is
+        # a weighted graph with at least one float weight, scale weights
+        # to integers and remember the inverse so we can divide the final
+        # answer by 10^(precision * matching_size) at the end. Without an
+        # explicit `rationalise_matching_size`, infer it from |V|//2 (the
+        # number of edges in a perfect matching). The inverse is a no-op
+        # for non-weighted-sum questions, so this phase is safe to fire
+        # whenever the hint is present.
+        if "rationalise_precision" in hints and isinstance(problem, dict) \
+                and "weights" in problem:
+            precision = hints["rationalise_precision"]
+            matching_size = hints.get(
+                "rationalise_matching_size",
+                len(problem.get("vertices", [])) // 2,
+            )
+            rw = RationaliseWeights(precision=precision, matching_size=matching_size)
+            if rw.applies_to(problem):
+                rresult = rw.apply(problem)
+                problem = rresult.problem
+                post_inverse = rresult.inverse
+                reductions_applied.append(rw.name)
+                workflow_trace.append(WorkflowStep(
+                    phase="rationalise",
+                    action=f"RationaliseWeights(precision={precision}, "
+                            f"matching_size={matching_size})",
+                    outcome="ok",
+                    detail=f"scaled {len(problem['weights'])} weights to integers; "
+                            f"final-answer divisor = 10^{precision * matching_size}",
+                ))
+            else:
+                workflow_trace.append(WorkflowStep(
+                    phase="rationalise",
+                    action=f"RationaliseWeights(precision={precision})",
+                    outcome="skipped",
+                    detail="weights already integer-valued (or absent)",
+                ))
 
         # ----- Phase 2: Classify --------------------------------------
         cls, classifier_name = self._classify_problem(problem)
@@ -544,6 +612,8 @@ class Orchestrator:
         leaf = self.leaf_registry.get((cls.tier, question))
         if leaf is not None and cls.in_family:
             answer = leaf(problem, question)
+            if post_inverse is not None:
+                answer = post_inverse(answer)
             workflow_trace.append(WorkflowStep(
                 phase="direct-dispatch", action=f"leaf_evaluator({cls.tier}, {question})",
                 outcome="ok",
@@ -577,8 +647,11 @@ class Orchestrator:
                             f"sub_evaluations={result['sub_evaluations']}",
                 ))
                 reductions_applied.append("HybridDecomposition(via hints)")
+                answer = result["answer"]
+                if post_inverse is not None:
+                    answer = post_inverse(answer)
                 return OrchestratorResult(
-                    answer=result["answer"],
+                    answer=answer,
                     classification=cls,
                     reductions_applied=reductions_applied,
                     sub_evaluations=result["sub_evaluations"],
@@ -610,6 +683,8 @@ class Orchestrator:
                 ))
                 reductions_applied.append(
                     f"TreewidthBoundedDP(bags={len(td.get('bags', []))})")
+                if post_inverse is not None:
+                    answer = post_inverse(answer)
                 return OrchestratorResult(
                     answer=answer,
                     classification=cls,
@@ -646,8 +721,11 @@ class Orchestrator:
                         ))
                         reductions_applied.append(
                             f"HybridDecomposition(auto={len(h.extra_edges)})")
+                        answer = result["answer"]
+                        if post_inverse is not None:
+                            answer = post_inverse(answer)
                         return OrchestratorResult(
-                            answer=result["answer"],
+                            answer=answer,
                             classification=cls,
                             reductions_applied=reductions_applied,
                             sub_evaluations=result["sub_evaluations"],
@@ -689,8 +767,11 @@ class Orchestrator:
                     detail=f"answer={result['answer']!r}",
                 ))
                 reductions_applied.append(reduction.name)
+                answer = result["answer"]
+                if post_inverse is not None:
+                    answer = post_inverse(answer)
                 return OrchestratorResult(
-                    answer=result["answer"],
+                    answer=answer,
                     classification=cls,
                     reductions_applied=reductions_applied,
                     sub_evaluations=result["sub_evaluations"],

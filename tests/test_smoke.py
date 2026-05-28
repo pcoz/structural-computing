@@ -49,7 +49,8 @@ def test_public_api_complete():
         # Replay cache
         "ReplayCache", "cached_runner", "default_key",
         # Verifier
-        "brute_force_count_matchings", "satisfies_gf2_affine",
+        "brute_force_count_matchings", "brute_force_weighted_matching_sum",
+        "satisfies_gf2_affine",
         "enumerate_satisfying_assignments", "gibbs_expectation_brute",
         "verify_pipeline",
         # Reductions (v0.1 foundation; concrete reductions in v0.2)

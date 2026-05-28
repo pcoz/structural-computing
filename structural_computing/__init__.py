@@ -42,6 +42,7 @@ from .trace import RichTrace, RegimeChange
 from .replay import ReplayCache, cached_runner, default_key
 from .verifier import (
     brute_force_count_matchings,
+    brute_force_weighted_matching_sum,
     satisfies_gf2_affine,
     enumerate_satisfying_assignments,
     gibbs_expectation_brute,
@@ -119,6 +120,7 @@ __all__ = [
     "default_key",
     # Verifier
     "brute_force_count_matchings",
+    "brute_force_weighted_matching_sum",
     "satisfies_gf2_affine",
     "enumerate_satisfying_assignments",
     "gibbs_expectation_brute",

@@ -42,6 +42,65 @@ def brute_force_count_matchings(vertices: Iterable, edges: Iterable) -> int:
     return holant_tools.perfect_matching_count_brute_force(list(vertices), list(edges))
 
 
+def brute_force_weighted_matching_sum(vertices: Iterable,
+                                       edges: Iterable,
+                                       weights: Dict[Tuple[Any, Any], float]) -> float:
+    """Exact weighted perfect-matching sum:
+    sum over perfect matchings M of (product of weights of edges in M).
+
+    Both endpoint orderings are checked when looking up an edge's weight,
+    so (u, v) and (v, u) are treated as the same edge. Missing edges
+    default to weight 1.0 (so the function reduces to a plain matching
+    count when all weights are 1).
+
+    O(|V|!! * |E|) brute force -- small n only. The honest companion
+    to the exact-but-large matchgate-Pfaffian computation.
+
+    Args:
+      vertices: iterable of vertex labels.
+      edges: iterable of (u, v) edge tuples.
+      weights: dict mapping edge (u, v) -> real or integer weight.
+
+    Returns:
+      The weighted matching sum. Returns 0 if |V| is odd.
+    """
+    vertices = list(vertices)
+    edges = list(edges)
+    n = len(vertices)
+    if n % 2 != 0:
+        return 0
+    # Build an undirected weight lookup.
+    w_lookup: Dict[Tuple[Any, Any], float] = {}
+    for (u, v), w in weights.items():
+        w_lookup[(u, v)] = w
+        w_lookup[(v, u)] = w
+    # Adjacency: for each vertex, list of neighbours via known edges.
+    adj: Dict[Any, List[Any]] = {v: [] for v in vertices}
+    for (u, v) in edges:
+        if v not in adj[u]:
+            adj[u].append(v)
+        if u not in adj[v]:
+            adj[v].append(u)
+    # Enumerate matchings recursively, accumulating weight products.
+    total = 0.0
+    vertex_set = list(vertices)
+
+    def recurse(unmatched: List[Any], partial_weight: float) -> None:
+        nonlocal total
+        if not unmatched:
+            total += partial_weight
+            return
+        v = unmatched[0]
+        rest = unmatched[1:]
+        for u in adj[v]:
+            if u in rest:
+                w = w_lookup.get((v, u), 1.0)
+                recurse([x for x in rest if x != u], partial_weight * w)
+
+    recurse(vertex_set, 1.0)
+    return total
+
+
 def satisfies_gf2_affine(x: int, A: np.ndarray, b: np.ndarray) -> bool:
     """Does integer `x` (interpreted as an n-bit bitstring with bit 0 = MSB)
     satisfy A x = b (mod 2)?"""
