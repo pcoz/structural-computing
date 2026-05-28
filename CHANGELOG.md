@@ -6,26 +6,88 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 once it reaches v1.0.0; until then, the v0.x API may shift between minor
 versions.
 
-## [Unreleased] — calibration loader
+## [0.3.0a1] — 2026-05-28 (v0.3 alpha — calibration + holographic + closure)
 
-### Calibration (structural_computing/calibration.py)
-- New optional module for loading cost-model calibration data produced
-  by the companion repo `structural-computing-bench`. Exposes
-  `apply_calibration`, `clear_calibration`, `get_calibration`,
-  `has_calibration_for`, `predict_seconds`.
-- The router does NOT consume this data directly yet (a v0.3
-  deliverable wires the predictions into route selection); for now the
-  data is available for diagnostic / planning use via
-  `predict_seconds(tier, question, n=...)`.
-- Calibration data structure matches the bench repo's render output:
-  `{(tier, question): {"model": "power_law"|"exponential", "params": (a, b), "rms": float}}`.
+**v0.3 closes the calibration loop, ships the holographic toolkit, and
+fills in every open Composition / Decomposition sketch from v0.2.**
 
-### Companion repo: structural-computing-bench
-- New separate repository for the benchmarking machinery
-  (timing primitives, curve fitters, problem generators, calibration
-  runner CLI, orchestrator-trace analytics). Lives separately to keep
-  the core library free of timing / measurement deps.
-- See https://github.com/pcoz/structural-computing-bench (TBC).
+### Calibration loop
+- `structural_computing/calibration.py`: optional module for loading
+  cost-model calibration data produced by the companion repo
+  `structural-computing-bench`. Exposes `apply_calibration`,
+  `clear_calibration`, `get_calibration`, `has_calibration_for`,
+  `predict_seconds`.
+- Router wiring: `route(classification, question=...)` now consults the
+  calibration registry. When a calibration entry exists for
+  `(tier, question)`:
+    * the cost field switches to `log2(predicted_seconds)`,
+    * the meter `cost_unit` is set to `"log2_seconds"`,
+    * `predicted_seconds` and `cost_source="calibrated"` are surfaced.
+  Without calibration, cost stays `log2(ops)` with
+  `cost_unit="log2_ops"` and `cost_source="heuristic"`.
+- Orchestrator wiring: when calibration is loaded for the about-to-fire
+  `(tier, question)`, the orchestrator emits a `[predict]` step in the
+  workflow trace before dispatch, recording the predicted seconds and
+  the size-hint used.
+- Companion repo `structural-computing-bench` (new, separate):
+  timing primitives, curve fitters (power-law / exponential), problem
+  generators per leaf evaluator, calibration runner CLI, orchestrator-
+  trace analytics. Lives at github.com/pcoz/structural-computing-bench.
+
+### Holographic toolkit (compose.py)
+- `HolographicBasisPair.transform_signature_general(values, arity)`:
+  applies `T^{otimes a}` to a general (non-symmetric) length-2^arity
+  signature tensor via `a` sequential 2x2 contractions — O(a * 2^a)
+  per call instead of the naive O(2^{2a}). End-to-end verified:
+  Hadamard maps `[1, 0, 0, 1]` (general view of 3-AND) to `[0, 2, 0, 2]`;
+  T then T^{-1} round-trips a random arity-3 signature.
+- `HolographicBasisPair.discover_basis(values)`: practical fragment of
+  Cai-Lu's SRP. Realisability gate (Cai-Lu Thm 2.5 order-2 recurrence)
+  + canonical-bases sweep (identity, Hadamard, swap, common shears,
+  rotation_4) + parameterised grid + coordinate-descent polish.
+  Scale-invariant matchgate-standard distance scoring rejects spurious
+  near-zero collapses. Finds Hadamard for `[1, 0, 0, 1]` and `[0, 1,
+  1, 0]`; honest stop on non-realisable signatures and degenerate
+  single-cube polynomials.
+- `HolographicBasisPair.discover_common_basis(signatures)`: multi-
+  signature SRP via Cai-Lu §4. Finds a single T that puts every input
+  signature into matchgate-standard form. Returns None when no common
+  basis exists (e.g., conflicting basis requirements or any signature
+  is non-realisable).
+
+### Compositions and decompositions (close every v0.2 sketch)
+- `Projection` (compose.py): user-supplied projector callable mapping a
+  list of sub-evaluations to a single composed value. Generalises
+  `LinearCombination` to any combiner (ratio, inclusion-exclusion,
+  max/min, etc).
+- `BranchSum` (compose.py): named `(name, amplitude, sub_problem)`
+  branches with `sum(amp_i * sub_eval(branch_i))` combine. Amplitudes
+  may be complex (Clifford+T pattern).
+- `PlanarSeparator` (decompose.py): divide-and-conquer along a user-
+  supplied vertex separator; enumerates `(S_to_A, S_to_B, S_pairs)`
+  partitions of the separator vertices; sums weighted products of
+  restricted-graph PerfMatches. Verified on C_4 / C_6 / weighted C_4
+  against brute force.
+- `RecursiveCircuitCut` (decompose.py): cut along a user-supplied edge
+  set; enumerate `2^|cut|` forced-in/forced-out assignments with
+  shared-endpoint pruning. The Tutte / Lovasz-Plummer identity
+  presented as a decomposition tree.
+
+### Orchestrator (new questions and routes)
+- New leaf evaluator `_holographic_transform_general_leaf` registered
+  for `('T3', 'holographic_transform_general')`. The orchestrator's
+  `_classify_problem` detects general-signature problem dicts (by the
+  simultaneous presence of `values` + `arity` + `basis_matrix`) and
+  routes them to a new T3 `classify_signature_general` branch.
+
+### Tests / examples
+- 229/229 in the main suite (excluding the originality directory).
+- Examples 12 (auto-discovery) and 13 (general transform) added.
+
+### Out of scope for v0.3 (deferred to v0.4)
+- Matchgate-Identity (MGI) realisability check for general (non-
+  symmetric) signatures on the 2^a-dim tensor.
+- Auto-detection of Lipton-Tarjan separators for `PlanarSeparator`.
 
 ## [0.2.0a1] — 2026-05-28 (v0.2 alpha — reductions layer)
 

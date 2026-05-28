@@ -103,14 +103,16 @@ layer for users widening the in-family boundary.
 
 ## Status
 
-**Alpha** (v0.2.0a1). API may still shift before v1.0, but the public
-surface is now stable enough for downstream prototyping. ~200 tests
+**Alpha** (v0.3.0a1). API may still shift before v1.0, but the public
+surface is now stable enough for downstream prototyping. 229 tests
 across ~14 test modules pass; the orchestrator handles all three
 problem types (graphs / constraint sets / signatures) with full
-provenance. The reductions / compositions / recursive-decomposition
-layer ships real Cai-Gorenstein and Cai-Lu constructions, not
-placeholders. See [CHANGELOG.md](CHANGELOG.md) for what's in this
-release and what's coming.
+provenance, including non-symmetric signatures via the general
+tensor-power holographic transform. The reductions / compositions /
+recursive-decomposition layer ships real Cai-Gorenstein and Cai-Lu
+constructions, not placeholders -- every v0.2-era `NotImplementedError`
+stub is now a working primitive. See [CHANGELOG.md](CHANGELOG.md) for
+what's in this release and what's coming.
 
 Companion repo
 [`structural-computing-bench`](https://github.com/pcoz/structural-computing-bench)
@@ -372,21 +374,24 @@ If you use this package in published work, please cite:
 
 ```
 Edward Chalk (sapientronic.ai). "structural-computing: declarative
-structural computation in Python." Version 0.2.0a1, 2026.
+structural computation in Python." Version 0.3.0a1, 2026.
 https://github.com/pcoz/structural-computing
 ```
 
 ## Roadmap
 
-- **v0.2.0a1** (current): orchestrator with workflow trace + verbose
-  mode; all v0.2 reductions / compositions / decompositions as REAL
-  Cai-Gorenstein and Cai-Lu constructions; calibration loader hooked
-  into the router; 11 self-contained examples; ~200 tests.
-- **v0.3.0** (in progress): wire calibration into route-selection
-  itself (not just diagnostics); auto-discovery of T in
-  `HolographicBasisPair` (Cai-Lu SRP algorithm); non-symmetric
-  `HolographicBasisPair` via the full tensor-power transform;
-  `Projection`, `BranchSum`, `PlanarSeparator`, `RecursiveCircuitCut`.
+- **v0.3.0a1** (current): closes the calibration loop (route's `cost`
+  field is `log2(seconds)` when calibrated, with `cost_unit` meter
+  always present), ships the holographic toolkit
+  (`HolographicBasisPair.transform_signature_general` for non-symmetric
+  signatures, `discover_basis` + `discover_common_basis` for Cai-Lu
+  SRP single- and multi-signature), and fills in every v0.2-era
+  `NotImplementedError` sketch (`Projection`, `BranchSum`,
+  `PlanarSeparator`, `RecursiveCircuitCut`). 229 tests passing.
+- **v0.4.0** (next): Matchgate-Identity (MGI) realisability check for
+  general (non-symmetric) signatures on the 2^a-dim tensor;
+  auto-detection of Lipton-Tarjan separators for `PlanarSeparator`;
+  long-tail polish for the SRP search.
 - **v1.0.0**: API stability contract; production-ready for downstream
   packages.
 

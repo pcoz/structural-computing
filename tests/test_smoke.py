@@ -26,7 +26,7 @@ from structural_computing import (
 
 
 def test_version_present():
-    assert structural_computing.__version__ == "0.2.0a1"
+    assert structural_computing.__version__ == "0.3.0a1"
 
 
 def test_public_api_complete():
