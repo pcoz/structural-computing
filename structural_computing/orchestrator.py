@@ -104,6 +104,12 @@ from .verifier import (
 # will silently NOT reach the new functionality and the user will get
 # `NoKnownReduction` even though the framework CAN do it. So: touch this
 # file every time.
+#
+# When adding a new phase, use the `emit(phase, action, outcome, detail)`
+# helper defined inside `evaluate()` -- it appends a WorkflowStep to the
+# trace AND (if verbose=True) streams the step to the log so the user
+# sees decisions and reasoning as the orchestrator runs. Don't append to
+# `workflow_trace` directly; that bypasses verbose mode.
 # ===========================================================================
 
 
@@ -474,7 +480,9 @@ class Orchestrator:
                   problem: Any,
                   question: str,
                   *,
-                  hints: Optional[Dict[str, Any]] = None) -> OrchestratorResult:
+                  hints: Optional[Dict[str, Any]] = None,
+                  verbose: bool = False,
+                  log: Optional[Callable[[str], None]] = None) -> OrchestratorResult:
         """Compute the answer to `question` on `problem`.
 
         The Orchestrator's evaluation is organised as a SEQUENCE OF PHASES.
@@ -494,6 +502,9 @@ class Orchestrator:
              is registered AND the problem is in-family, call it directly.
           4. **Hint-driven** -- if the user supplied `hints["extra_edges"]`,
              try `HybridDecomposition` with those extras.
+          4.5. **Treewidth DP** -- if `hints["tree_decomposition"]` is
+             supplied and the question is `matching_count`, run the
+             Bodlaender-style multi-bag DP.
           5. **Auto-Hybrid** -- if the question is "matching_count" and the
              graph is non-planar but has a rotation system, try
              `HybridDecomposition(auto=True)` (greedy extras discovery).
@@ -507,6 +518,30 @@ class Orchestrator:
         with phase, action, outcome, and detail. The caller can inspect the
         trace to understand exactly what the orchestrator tried.
 
+        VERBOSE MODE
+        ------------
+        Pass `verbose=True` to stream each step to stdout (or a custom `log`
+        callable) AS IT HAPPENS. The output explains which phase fired, what
+        action was taken, what the outcome was, and the reasoning behind
+        each decision. This is the easiest way to see what the orchestrator
+        is doing inside a long-running pipeline, debug an unexpected honest
+        stop, or learn the framework by following an evaluate() call.
+
+        Example::
+
+            orch = Orchestrator()
+            r = orch.evaluate(problem, "matching_count", verbose=True)
+            # >> [normalise] NormaliseGraphFormat -> skipped
+            # >>     reason: input already in canonical form
+            # >> [classify] classify_graph -> ok
+            # >>     reason: tier=T2, planar (genus 0) on 4 vertices
+            # >> [direct-dispatch] leaf_evaluator(T2, matching_count) -> ok
+            # >>     reason: answer=3, evaluator=_matching_count_leaf
+
+        Pass a custom `log=my_logger` to redirect output (defaults to
+        `print` to stdout). The caller's log function receives one string
+        per line.
+
         Args:
           problem: the input problem (graph, constraint set, signature).
           question: the question to answer ("matching_count" is the
@@ -514,6 +549,10 @@ class Orchestrator:
           hints: optional parameters for parametric reductions. For
             graph matching with non-planar boundary, pass
             `{"extra_edges": [...]}` to apply HybridDecomposition.
+          verbose: if True, stream the workflow trace to stdout (or `log`)
+            as the orchestrator runs.
+          log: custom logger; a callable taking one string. Defaults to
+            `print`. Only used when `verbose=True`.
 
         Returns:
           OrchestratorResult with the answer + classification + provenance.
@@ -531,24 +570,36 @@ class Orchestrator:
         # RationaliseWeights to undo the 10^(precision * matching_size)
         # scaling). None when no post-processing is needed.
         post_inverse: Optional[Callable[[Any], Any]] = None
+        # Verbose-mode logger and emitter.
+        log_fn: Callable[[str], None] = log if log is not None else print
+
+        def emit(phase: str, action: str, outcome: str, detail: str = "") -> None:
+            """Append a WorkflowStep to the trace AND (if verbose) print it
+            so the caller sees decisions and reasoning as the orchestrator
+            runs."""
+            step = WorkflowStep(phase=phase, action=action,
+                                  outcome=outcome, detail=detail)
+            workflow_trace.append(step)
+            if verbose:
+                log_fn(f"[{phase}] {action} -> {outcome}")
+                if detail:
+                    log_fn(f"    reason: {detail}")
+
+        if verbose:
+            log_fn(f"Orchestrator.evaluate(question={question!r}, "
+                   f"hints={list(hints.keys()) or '(none)'})")
 
         # ----- Phase 1: Normalise --------------------------------------
         normaliser = NormaliseGraphFormat()
         if normaliser.applies_to(problem):
             problem = normaliser.apply(problem).problem
             reductions_applied.append(normaliser.name)
-            workflow_trace.append(WorkflowStep(
-                phase="normalise", action="NormaliseGraphFormat",
-                outcome="ok",
-                detail=f"vertices={len(problem.get('vertices', []))}, "
-                        f"edges={len(problem.get('edges', []))}",
-            ))
+            emit("normalise", "NormaliseGraphFormat", "ok",
+                 f"vertices={len(problem.get('vertices', []))}, "
+                 f"edges={len(problem.get('edges', []))}")
         else:
-            workflow_trace.append(WorkflowStep(
-                phase="normalise", action="NormaliseGraphFormat",
-                outcome="skipped",
-                detail="input already in canonical form (or unsupported type)",
-            ))
+            emit("normalise", "NormaliseGraphFormat", "skipped",
+                 "input already in canonical form (or unsupported type)")
 
         # ----- Phase 1.5: Rationalise weights (hint-driven) -----------
         # If the user supplied `rationalise_precision` AND the problem is
@@ -572,41 +623,31 @@ class Orchestrator:
                 problem = rresult.problem
                 post_inverse = rresult.inverse
                 reductions_applied.append(rw.name)
-                workflow_trace.append(WorkflowStep(
-                    phase="rationalise",
-                    action=f"RationaliseWeights(precision={precision}, "
-                            f"matching_size={matching_size})",
-                    outcome="ok",
-                    detail=f"scaled {len(problem['weights'])} weights to integers; "
-                            f"final-answer divisor = 10^{precision * matching_size}",
-                ))
+                emit("rationalise",
+                     f"RationaliseWeights(precision={precision}, "
+                     f"matching_size={matching_size})",
+                     "ok",
+                     f"scaled {len(problem['weights'])} weights to integers; "
+                     f"final-answer divisor = 10^{precision * matching_size}")
             else:
-                workflow_trace.append(WorkflowStep(
-                    phase="rationalise",
-                    action=f"RationaliseWeights(precision={precision})",
-                    outcome="skipped",
-                    detail="weights already integer-valued (or absent)",
-                ))
+                emit("rationalise",
+                     f"RationaliseWeights(precision={precision})",
+                     "skipped",
+                     "weights already integer-valued (or absent)")
 
         # ----- Phase 2: Classify --------------------------------------
         cls, classifier_name = self._classify_problem(problem)
         if cls is None:
-            workflow_trace.append(WorkflowStep(
-                phase="classify", action="auto-dispatch",
-                outcome="failed",
-                detail=f"could not infer classifier for problem type {type(problem).__name__}",
-            ))
+            emit("classify", "auto-dispatch", "failed",
+                 f"could not infer classifier for problem type {type(problem).__name__}")
             raise NoKnownReduction(
                 Classification(tier="T7", meters={"problem_type": type(problem).__name__},
                                 in_family=False, reasoning="unknown problem type"),
                 reductions_applied,
             )
-        workflow_trace.append(WorkflowStep(
-            phase="classify", action=classifier_name,
-            outcome="ok",
-            detail=f"tier={cls.tier}, in_family={cls.in_family}, "
-                    f"reasoning='{cls.reasoning}'",
-        ))
+        emit("classify", classifier_name, "ok",
+             f"tier={cls.tier}, in_family={cls.in_family}, "
+             f"reasoning='{cls.reasoning}'")
 
         # ----- Phase 3: Direct dispatch -------------------------------
         leaf = self.leaf_registry.get((cls.tier, question))
@@ -614,11 +655,9 @@ class Orchestrator:
             answer = leaf(problem, question)
             if post_inverse is not None:
                 answer = post_inverse(answer)
-            workflow_trace.append(WorkflowStep(
-                phase="direct-dispatch", action=f"leaf_evaluator({cls.tier}, {question})",
-                outcome="ok",
-                detail=f"answer={answer!r}, evaluator={leaf.__name__}",
-            ))
+            emit("direct-dispatch",
+                 f"leaf_evaluator({cls.tier}, {question})", "ok",
+                 f"answer={answer!r}, evaluator={leaf.__name__}")
             return OrchestratorResult(
                 answer=answer,
                 classification=cls,
@@ -627,12 +666,10 @@ class Orchestrator:
                 leaf_evaluator_used=leaf.__name__,
                 workflow_trace=workflow_trace,
             )
-        workflow_trace.append(WorkflowStep(
-            phase="direct-dispatch", action=f"leaf_evaluator({cls.tier}, {question})",
-            outcome="skipped",
-            detail=(f"no leaf evaluator registered for ({cls.tier}, {question})"
-                    if leaf is None else "problem out-of-family"),
-        ))
+        emit("direct-dispatch",
+             f"leaf_evaluator({cls.tier}, {question})", "skipped",
+             (f"no leaf evaluator registered for ({cls.tier}, {question})"
+              if leaf is None else "problem out-of-family"))
 
         # ----- Phase 4: Hint-driven HybridDecomposition ---------------
         if "extra_edges" in hints and question == "matching_count":
@@ -640,12 +677,9 @@ class Orchestrator:
                 result = self._try_hybrid_decomposition(
                     problem, hints["extra_edges"], origin="hints",
                 )
-                workflow_trace.append(WorkflowStep(
-                    phase="hint-driven", action="HybridDecomposition(via hints)",
-                    outcome="ok",
-                    detail=f"answer={result['answer']!r}, "
-                            f"sub_evaluations={result['sub_evaluations']}",
-                ))
+                emit("hint-driven", "HybridDecomposition(via hints)", "ok",
+                     f"answer={result['answer']!r}, "
+                     f"sub_evaluations={result['sub_evaluations']}")
                 reductions_applied.append("HybridDecomposition(via hints)")
                 answer = result["answer"]
                 if post_inverse is not None:
@@ -659,10 +693,8 @@ class Orchestrator:
                     workflow_trace=workflow_trace,
                 )
             except (ReductionNotApplicable, NoKnownReduction) as e:
-                workflow_trace.append(WorkflowStep(
-                    phase="hint-driven", action="HybridDecomposition(via hints)",
-                    outcome="failed", detail=str(e),
-                ))
+                emit("hint-driven", "HybridDecomposition(via hints)",
+                     "failed", str(e))
 
         # ----- Phase 4.5: Tree-decomposition DP (hint-driven) ---------
         # If the user supplied a tree decomposition AND the question is
@@ -675,12 +707,9 @@ class Orchestrator:
                 plan = decomp.decompose(problem)
                 # Plan is precomputed-value -- evaluate just returns it.
                 answer = plan.evaluate(lambda _p: 0)
-                workflow_trace.append(WorkflowStep(
-                    phase="treewidth-dp",
-                    action="TreewidthBoundedDP(tree_decomposition=...)",
-                    outcome="ok",
-                    detail=f"answer={answer}, bags={len(td.get('bags', []))}",
-                ))
+                emit("treewidth-dp",
+                     "TreewidthBoundedDP(tree_decomposition=...)", "ok",
+                     f"answer={answer}, bags={len(td.get('bags', []))}")
                 reductions_applied.append(
                     f"TreewidthBoundedDP(bags={len(td.get('bags', []))})")
                 if post_inverse is not None:
@@ -694,11 +723,9 @@ class Orchestrator:
                     workflow_trace=workflow_trace,
                 )
             except (NotImplementedError, ValueError) as e:
-                workflow_trace.append(WorkflowStep(
-                    phase="treewidth-dp",
-                    action="TreewidthBoundedDP(tree_decomposition=...)",
-                    outcome="failed", detail=str(e),
-                ))
+                emit("treewidth-dp",
+                     "TreewidthBoundedDP(tree_decomposition=...)",
+                     "failed", str(e))
 
         # ----- Phase 5: Auto-Hybrid (greedy extras discovery) ---------
         if question == "matching_count" and not cls.in_family and "rotation" in problem:
@@ -711,14 +738,10 @@ class Orchestrator:
                         result = self._evaluate_sub_problems(
                             rresult.problem["sub_problems"], rresult, question,
                         )
-                        workflow_trace.append(WorkflowStep(
-                            phase="auto-hybrid",
-                            action="HybridDecomposition(auto=True)",
-                            outcome="ok",
-                            detail=f"discovered {len(h.extra_edges)} extras; "
-                                    f"answer={result['answer']!r}; "
-                                    f"sub_evaluations={result['sub_evaluations']}",
-                        ))
+                        emit("auto-hybrid", "HybridDecomposition(auto=True)", "ok",
+                             f"discovered {len(h.extra_edges)} extras; "
+                             f"answer={result['answer']!r}; "
+                             f"sub_evaluations={result['sub_evaluations']}")
                         reductions_applied.append(
                             f"HybridDecomposition(auto={len(h.extra_edges)})")
                         answer = result["answer"]
@@ -733,39 +756,29 @@ class Orchestrator:
                             workflow_trace=workflow_trace,
                         )
                     else:
-                        workflow_trace.append(WorkflowStep(
-                            phase="auto-hybrid",
-                            action="HybridDecomposition(auto=True)",
-                            outcome="failed",
-                            detail="auto-detection found no planarising extras "
-                                    "(see auto_detect_extras docstring's 'Honest scope')",
-                        ))
+                        emit("auto-hybrid", "HybridDecomposition(auto=True)",
+                             "failed",
+                             "auto-detection found no planarising extras "
+                             "(see auto_detect_extras docstring's 'Honest scope')")
             except Exception as e:
-                workflow_trace.append(WorkflowStep(
-                    phase="auto-hybrid",
-                    action="HybridDecomposition(auto=True)",
-                    outcome="failed", detail=str(e),
-                ))
+                emit("auto-hybrid", "HybridDecomposition(auto=True)",
+                     "failed", str(e))
 
         # ----- Phase 6: Registered reductions -------------------------
         for reduction in self.reductions:
             if reduction is normaliser:
                 continue                                # already applied
             if not reduction.applies_to(problem):
-                workflow_trace.append(WorkflowStep(
-                    phase="reduction", action=reduction.name,
-                    outcome="skipped", detail="not applicable to current problem",
-                ))
+                emit("reduction", reduction.name, "skipped",
+                     "not applicable to current problem")
                 continue
             try:
                 rresult = reduction.apply(problem)
                 result = self._evaluate_sub_problems(
                     rresult.problem.get("sub_problems", []), rresult, question,
                 )
-                workflow_trace.append(WorkflowStep(
-                    phase="reduction", action=reduction.name, outcome="ok",
-                    detail=f"answer={result['answer']!r}",
-                ))
+                emit("reduction", reduction.name, "ok",
+                     f"answer={result['answer']!r}")
                 reductions_applied.append(reduction.name)
                 answer = result["answer"]
                 if post_inverse is not None:
@@ -779,17 +792,11 @@ class Orchestrator:
                     workflow_trace=workflow_trace,
                 )
             except (ReductionNotApplicable, NoKnownReduction, NotImplementedError) as e:
-                workflow_trace.append(WorkflowStep(
-                    phase="reduction", action=reduction.name,
-                    outcome="failed", detail=str(e),
-                ))
+                emit("reduction", reduction.name, "failed", str(e))
 
         # ----- Phase 7: Honest stop -----------------------------------
-        workflow_trace.append(WorkflowStep(
-            phase="honest-stop", action="NoKnownReduction",
-            outcome="honest-stop",
-            detail=f"tier={cls.tier}, attempted={reductions_applied}",
-        ))
+        emit("honest-stop", "NoKnownReduction", "honest-stop",
+             f"tier={cls.tier}, attempted={reductions_applied}")
         raise NoKnownReduction(cls, reductions_applied)
 
     # -- Helpers ------------------------------------------------------------

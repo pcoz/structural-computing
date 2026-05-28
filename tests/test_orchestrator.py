@@ -166,6 +166,37 @@ def test_orchestrator_unknown_problem_type():
         orch.evaluate({"unknown_kind": "weirdness"}, question="anything")
 
 
+def test_orchestrator_verbose_mode_streams_steps_to_log():
+    """When verbose=True is passed, each WorkflowStep is also streamed to
+    the log callable (defaults to print). Capture the log lines via a
+    custom log function and check the structure."""
+    captured: list = []
+    orch = Orchestrator()
+    r = orch.evaluate(K4_TETRAHEDRON, question="matching_count",
+                       verbose=True, log=captured.append)
+    assert r.answer == 3
+    # Header line is first.
+    assert captured[0].startswith("Orchestrator.evaluate")
+    # Each phase appears as a "[phase] action -> outcome" line.
+    phase_lines = [l for l in captured if l.startswith("[")]
+    assert any("[normalise]" in l for l in phase_lines)
+    assert any("[classify]" in l for l in phase_lines)
+    assert any("[direct-dispatch]" in l and "-> ok" in l for l in phase_lines)
+    # Detail lines start with "    reason:".
+    reason_lines = [l for l in captured if l.startswith("    reason:")]
+    assert any("tier=T2" in l for l in reason_lines)
+
+
+def test_orchestrator_verbose_default_silent():
+    """verbose=False is the default and does not call log()."""
+    captured: list = []
+    orch = Orchestrator()
+    r = orch.evaluate(K4_TETRAHEDRON, question="matching_count",
+                       log=captured.append)
+    assert r.answer == 3
+    assert captured == []                        # no log lines emitted
+
+
 def test_orchestrator_rationalise_weighted_matching_sum():
     """A weighted graph with float weights, asked for weighted_matching_sum,
     is auto-rationalised when `hints['rationalise_precision']` is supplied.
