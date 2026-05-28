@@ -1,8 +1,50 @@
 # structural-computing
 
-**Declarative structural computation:** exact polynomial-time answers to
-combinatorial questions on structured graphs, with automatic routing to
-the cheapest correct evaluator.
+**Exact polynomial-time answers to combinatorial questions that today's
+tools can only sample, estimate, or give up on** — for the subset of
+problems with the right structural shape (planar, bounded-genus,
+near-matchgate, GF(2)-affine). When applicable, the framework returns
+bit-identical reproducible numbers in milliseconds-to-seconds. When
+inapplicable, it stops honestly with a clear pointer to the right
+external tool. No silent approximation.
+
+## What this lets you do
+
+- **Compare two configurations exactly** even when the difference is
+  below Monte-Carlo's noise floor. Two network topologies, two
+  reinsurance treaty structures, two CI pipeline designs that look
+  equivalent to sampling — the framework returns *"Configuration B is
+  90.2% more reliable, provably real, not a sampling artefact"* in
+  milliseconds.
+
+- **Compute exact rare-tail probabilities** for failure modes you'd
+  otherwise have to estimate by long-running Monte-Carlo. Risk reports
+  for regulators, capacity-planning analyses that need defensible
+  numbers, reliability claims that have to be bit-reproducible across
+  runs.
+
+- **Count solutions to combinatorial problems exactly** rather than
+  finding just one. How many valid task-resource assignments exist?
+  How many distinct ways can these components be paired? Which edges
+  are structural single points of failure? Standard solvers find one
+  answer; this framework counts and audits the whole solution space.
+
+- **Route different kinds of problems automatically.** The framework's
+  classifier figures out which structural shape your problem has, picks
+  the right exact-evaluation kernel (FKT for planar graphs, bounded-
+  genus Kasteleyn for higher-genus, CH-form for stabilizer arithmetic,
+  tropical Pfaffian for max-weight optimisation), and produces an
+  answer with a recorded provenance you can audit.
+
+- **Beat out-of-family problems into shape.** A graph that isn't
+  natively planar can often be made tractable via reductions (gadget
+  substitution, basis changes, parity-split, hybrid decomposition),
+  compositions (linear combinations of in-family evaluations,
+  holographic basis pairs), or recursive decomposition (treewidth-
+  bounded DP, Shannon expansion, circuit cutting). The framework's
+  reduction layer makes this routine.
+
+## A taste
 
 ```bash
 pip install structural-computing
@@ -13,15 +55,16 @@ from structural_computing import StructuralComputer
 
 sc = StructuralComputer()
 
-# A network configuration as edges
-config_a = [(0, 1), (1, 2), (2, 3), (3, 0)]
-config_b = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
+# Two candidate network topologies.
+config_a = [(0, 1), (1, 2), (2, 3), (3, 0)]                  # 4-cycle
+config_b = [(0, 1), (0, 2), (0, 3),                           # K_4
+            (1, 2), (1, 3), (2, 3)]
 
-# Exact rare-tail probability under independent edge failure
-print(sc.tail_probability(config_a, p_fail=0.05))   # 9.5063e-03 (exact, ~1.7 ms)
-print(sc.tail_probability(config_b, p_fail=0.05))   # 9.2686e-04
+# Exact rare-tail probability under independent edge failure.
+print(sc.tail_probability(config_a, p_fail=0.05))    # 9.5063e-03 (exact, ~1.7 ms)
+print(sc.tail_probability(config_b, p_fail=0.05))    # 9.2686e-04
 
-# Compare two configurations -- regulator-defensible verdict
+# Compare them -- regulator-defensible verdict, no sampling noise.
 report = sc.compare(config_a, config_b, p_fail=0.05)
 print(report.explain())
 # "Configuration B is 90.2% more reliable (9.5063e-03 vs 9.2686e-04).
@@ -32,10 +75,31 @@ print(report.explain())
 That comparison — sub-statistical-noise-floor, bit-identically
 reproducible, regulator-defensible — **no off-the-shelf reliability
 tool can produce**, because their internal data models are structurally
-Monte-Carlo.
+Monte-Carlo and the question's signal lives below the sampling floor.
 
-This package is the friendly user-facing entry point to the matchgate-
-Holant family of exact polynomial-time computations on structured graphs.
+## The underlying claim
+
+Many problems people actually care about — counting valid configurations,
+exact rare-tail probabilities, single-point-of-failure analysis,
+regulator-grade configuration comparison, partition functions of planar
+Ising models, free-fermion-equivalent quantum simulation, structural
+audit of workflow graphs — sit in a mathematically structured family
+called **matchgate-Holant**. For problems IN this family, exact
+polynomial-time computation is possible via Kasteleyn's FKT theorem
+(1961) and its bounded-genus extensions (Galluccio-Loebl). For many
+problems NOT directly in this family, transformations bring them in.
+
+The framework is the runnable form of that claim: a Python package that
+takes your problem, classifies its structure, applies whatever
+transformation it needs, and produces an exact answer with provenance —
+or stops honestly and tells you what external tool to reach for.
+
+The friendly entry point is `StructuralComputer` (one-liners hide every
+framework internal). The underlying `Orchestrator` exposes the routing
+decisions for users who want to compose custom pipelines or plug in
+their own evaluators. The `transform.py` / `compose.py` / `decompose.py`
+modules expose the reductions / compositions / recursive-decomposition
+layer for users widening the in-family boundary.
 
 ## Status
 
