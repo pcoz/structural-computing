@@ -150,21 +150,67 @@ class Projection:
 
 
 class HolographicBasisPair:
-    """Two matchgates with coordinated bases that, together, compute a
+    r"""Two matchgates with **coordinated bases** that, together, compute a
     quantity neither could alone.
 
-    This is Valiant 2004's central technique and the engine behind most
-    known holographic algorithms (Cai-Lu-Xia). The framework's classifier
-    extension to recognise when a basis-pair composition is available
-    is the v0.2 deliverable.
+    This is Valiant 2004's central technique ("Holographic Algorithms"
+    DOI 10.1109/FOCS.2004.40) and the engine behind most known
+    holographic algorithms (Cai-Lu-Xia 2009 onwards). The mental model:
 
-    Status: not implemented in v0.1.
+      Given a 2x2 invertible "basis matrix" M, the same signature can be
+      "viewed in different bases" via the transformation
+      `sigma' = (M^(-1))^{⊗n} sigma M^{⊗n}`. A signature that is NOT
+      matchgate-realisable in the standard basis may BE matchgate-
+      realisable in a transformed basis -- and Valiant's "holographic"
+      argument is that this constitutes an EXACT poly-time algorithm
+      for the original problem.
+
+    v0.1 ships only the **identity-basis no-op case**: if the supplied
+    basis matrix is the 2x2 identity, the basis pair is the trivial
+    (no transformation) one and `evaluate(sub_evaluator)` just calls
+    `sub_evaluator` on a marker problem and returns. This validates the
+    API surface; the substantive non-identity basis-change transformation
+    is the v0.2 deliverable that implements
+    `sigma' = M^{⊗n} ⋅ sigma`.
+
+    For non-trivial basis changes today, the framework's user is expected
+    to manually transform their signature in the chosen basis and then
+    invoke the framework on the transformed signature. The full
+    automated v0.2 form will recognise when a basis change unlocks
+    matchgate-realisability and apply it transparently.
     """
     name = "HolographicBasisPair"
 
+    def __init__(self, basis_matrix=None):
+        """`basis_matrix` is the 2x2 invertible matrix M defining the
+        basis change. v0.1 only supports the 2x2 identity matrix
+        (no-op case); other matrices raise NotImplementedError pending
+        the v0.2 Valiant-2004 transformation implementation."""
+        self.basis_matrix = basis_matrix
+
     def evaluate(self, sub_evaluator):
+        import numpy as np
+        if self.basis_matrix is None:
+            raise ValueError(
+                f"{self.name}: specify a 2x2 invertible basis_matrix. "
+                f"v0.1 only supports the identity (no-op)."
+            )
+        M = np.asarray(self.basis_matrix, dtype=float)
+        if M.shape != (2, 2):
+            raise ValueError(
+                f"{self.name}: basis_matrix must be 2x2; got shape {M.shape}"
+            )
+        if np.allclose(M, np.eye(2)):
+            # The trivial case: identity basis is no transformation.
+            # The "sub_problem" is just a marker; the user's
+            # sub_evaluator is expected to handle it.
+            return sub_evaluator({"identity_basis": True,
+                                    "note": "no transformation -- evaluate signature in the natural basis"})
         raise NotImplementedError(
-            f"{self.name} is on the v0.2 roadmap."
+            f"{self.name} with non-identity basis is on the v0.2 roadmap. "
+            f"See Valiant 2004 ('Holographic Algorithms', DOI 10.1109/FOCS.2004.40) "
+            f"for the transformation; full implementation requires the basis-change "
+            f"machinery that the framework will gain in v0.2."
         )
 
 

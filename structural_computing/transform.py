@@ -231,29 +231,67 @@ class NormaliseGraphFormat:
 # When each is implemented, replacing the body is the only change required.
 
 class CrossingElimination:
-    """Replace each crossing in a near-planar graph layout with a small
+    r"""Replace each crossing in a near-planar graph layout with a small
     planar gadget that preserves the matching sum.
 
-    For a graph that's planar EXCEPT for a small number of crossings (real
+    For a graph that's planar except for a small number of crossings (real
     workflow / dependency graphs are often "mostly planar" with a few
     crossings that come from layout artefacts rather than fundamental
-    non-planarity), this reduction makes the graph genuinely planar at
-    the cost of a few extra vertices per crossing.
+    non-planarity), this reduction makes the graph genuinely planar via a
+    polynomial-size gadget per crossing -- vs `HybridDecomposition`'s
+    exponential `2^k` for `k` crossings.
 
-    Status: not implemented in v0.1. Standard technique from the
-    holographic-algorithm tradition (Cai-Lu-Xia, Valiant 2004). The
-    gadget construction is well-defined; implementation is a matter
-    of plumbing.
+    The construction (Cai-Lu-Xia 2009, "Holographic algorithms with
+    matchgates capture precisely tractable planar #CSP"): for each
+    crossing of edges (a, b) and (c, d), substitute a 4-port planar
+    gadget on 4 fresh internal vertices whose matching contribution at
+    its 4 dangling edges equals the contribution of the original
+    crossing. The gadget structure is the specific signature-preserving
+    construction documented in the paper.
+
+    v0.1 ships only the **trivial no-crossings case**: if you instantiate
+    with `crossings=[]` (or None) and apply to a graph, the reduction is
+    the identity (the graph is unchanged). This is correct for already-
+    planar inputs and provides the API surface for callers; the
+    substantive Cai-Lu-Xia gadget construction is the v0.2 deliverable.
+
+    For graphs with actual crossings today, use `HybridDecomposition`
+    with the crossing edges as the "extra-edge set" -- you pay the
+    exponential `2^k` cost, but you get the exact matching count via
+    the v0.1 framework with no missing primitive.
     """
     name = "CrossingElimination"
 
+    def __init__(self, crossings: Optional[List[Tuple[Tuple, Tuple]]] = None):
+        """`crossings` is a list of `(edge_a, edge_b)` pairs that cross
+        in the layout. Each edge is a `(u, v)` tuple. v0.1 only supports
+        the empty list (no crossings -> identity reduction); non-empty
+        lists raise NotImplementedError pending the v0.2 Cai-Lu-Xia
+        gadget."""
+        self.crossings: List[Tuple[Tuple, Tuple]] = list(crossings or [])
+
     def applies_to(self, problem: Any) -> bool:
-        # Will be: True iff `problem` is a near-planar graph with bounded crossings.
-        return False
+        """True iff `problem` looks like a graph dict (vertices + edges)."""
+        return isinstance(problem, dict) and "vertices" in problem and "edges" in problem
 
     def apply(self, problem: Any) -> ReductionResult:
+        if not self.applies_to(problem):
+            raise ReductionNotApplicable(
+                f"{self.name}: expects a graph dict with 'vertices' and 'edges'"
+            )
+        if not self.crossings:
+            # The trivial case: no crossings declared, identity reduction.
+            return ReductionResult(
+                problem=problem,
+                cost_overhead=0.0,
+                inverse=lambda x: x,
+                notes="no crossings declared; identity reduction",
+            )
         raise NotImplementedError(
-            f"{self.name} is on the v0.2 roadmap. See "
+            f"{self.name} with non-empty crossings is on the v0.2 roadmap. "
+            f"For exact matching count on a graph with crossings today, "
+            f"use HybridDecomposition with the crossing edges as the "
+            f"'extra-edge set'. See "
             f"admissibility-geometry/proposals/reductions_compositions_recursive_decomposition.md"
         )
 

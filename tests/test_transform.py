@@ -153,11 +153,21 @@ def test_hybrid_rejects_missing_extra_edges():
 # Sketches that should raise NotImplementedError (v0.2 deliverables)
 # ---------------------------------------------------------------------------
 
-def test_crossing_elimination_is_a_v02_sketch():
-    """CrossingElimination raises NotImplementedError until v0.2 ships it."""
-    r = CrossingElimination()
+def test_crossing_elimination_trivial_no_crossings():
+    """CrossingElimination with no declared crossings is identity."""
+    r = CrossingElimination(crossings=[])
+    result = r.apply({"vertices": [0, 1], "edges": [(0, 1)]})
+    assert result.cost_overhead == 0.0
+    # Identity inverse: answer passes through unchanged.
+    assert result.inverse(42) == 42
+
+
+def test_crossing_elimination_with_crossings_is_v02():
+    """CrossingElimination with non-empty crossings raises NotImplementedError
+    pending the v0.2 Cai-Lu-Xia gadget construction."""
+    r = CrossingElimination(crossings=[((0, 1), (2, 3))])
     with pytest.raises(NotImplementedError):
-        r.apply({"vertices": [], "edges": []})
+        r.apply({"vertices": [0, 1, 2, 3], "edges": [(0, 1), (2, 3)]})
 
 
 def test_high_degree_vertex_split_is_a_v02_sketch():
