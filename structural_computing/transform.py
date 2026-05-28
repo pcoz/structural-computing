@@ -31,8 +31,133 @@ This v0.1 release ships:
 The full set of planned reductions lives in
 admissibility-geometry/proposals/reductions_compositions_recursive_decomposition.md.
 """
+import copy
 import dataclasses
-from typing import Any, Callable, List, Optional, Protocol, Tuple
+from typing import Any, Callable, Dict, List, Optional, Protocol, Tuple
+
+
+# ---------------------------------------------------------------------------
+# Auto-detection helper for HybridDecomposition (v0.2)
+# ---------------------------------------------------------------------------
+
+def auto_detect_extras(rotation: Dict[Any, List[Any]],
+                        *, max_extras: int = 6) -> List[Tuple[Any, Any]]:
+    r"""Greedy heuristic: find a small set of edges whose removal makes
+    the input graph planar (genus 0).
+
+    For a graph G with genus g, we iteratively remove the edge whose
+    removal reduces the genus the most. Stop when genus reaches 0 (the
+    remaining graph is planar) or when no removal reduces genus
+    (heuristic stuck) or when `max_extras` edges have been removed
+    (to prevent the 2^|extras| blowup HybridDecomposition will pay).
+
+    The returned list is the "extra-edge set" suitable for feeding
+    to `HybridDecomposition` -- branching on these extras turns the
+    non-planar input into a sum of planar sub-problems each evaluable
+    via FKT in polynomial time.
+
+    Cost: each genus computation is `O(|V| + |E|)`; the outer loop is
+    `O(|extras|)` and each inner sweep over edges is `O(|E|)`, so the
+    full heuristic runs in `O(|extras| * |E| * (|V| + |E|))`. For
+    practical graphs with a few extras, this is milliseconds.
+
+    Args:
+      rotation: the input graph as a rotation-system dict.
+      max_extras: hard cap on the number of extra edges to discover.
+        The greedy stops here even if the graph is still non-planar.
+
+    Returns:
+      A list of edges (as `(u, v)` tuples) suitable for
+      `HybridDecomposition(extra_edges=...)`. Empty list if the input
+      is already planar OR if the heuristic gets stuck (see "Honest
+      scope" below); partial list if the heuristic can't reach
+      planarity within `max_extras`.
+
+    Honest scope (v0.2 first cut). The greedy walks the genus surface
+    by single-edge removals on the rotation system. For many graphs,
+    removing one edge from a cellular embedding produces a NON-cellular
+    embedding (a face becomes a non-disk). `holant_tools.genus_from_rotation_system`
+    refuses to compute genus on non-cellular embeddings, which the
+    heuristic treats as "no improvement available." This means
+    auto-detection returns `[]` (the caller should fall back to manual
+    `extra_edges` specification) for many simple non-planar graphs
+    including the K_{3,3} and 4x4-toroidal canonical cases.
+
+    A v0.3 fix is to RE-EMBED the residual graph after each edge
+    removal (find a new cellular rotation), which requires a planarity-
+    embedding routine the framework doesn't currently ship. Until then,
+    auto-detection is a useful-when-it-works helper, not a general
+    solver.
+
+    Raises:
+      ImportError: if `holant_tools` is not installed (the heuristic
+        delegates to `holant_tools.genus_from_rotation_system`).
+    """
+    import holant_tools                    # delegated genus computation
+
+    def _genus(rot: Dict[Any, List[Any]]) -> int:
+        """Genus of a rotation system. Returns infinity if the rotation
+        system isn't a valid cellular embedding (the genus formula
+        requires connectedness; an isolated-vertex rotation may fail)."""
+        try:
+            return holant_tools.genus_from_rotation_system(rot).genus
+        except Exception:
+            return 10 ** 9                  # treat invalid as "very bad"
+
+    def _enumerate_edges(rot: Dict[Any, List[Any]]) -> List[Tuple[Any, Any]]:
+        """Edges (u, v) with u < v in str-order, no duplicates."""
+        seen = set()
+        edges = []
+        for u, neighbours in rot.items():
+            for v in neighbours:
+                key = tuple(sorted([u, v], key=str))
+                if key not in seen and u != v:
+                    seen.add(key)
+                    edges.append(key)
+        return edges
+
+    def _remove_edge_from_rotation(rot: Dict[Any, List[Any]],
+                                     edge: Tuple[Any, Any]) -> Dict[Any, List[Any]]:
+        """Return a new rotation system with `edge` removed from both
+        endpoints' neighbour lists. The original is not mutated."""
+        u, v = edge
+        out = {k: list(neighbours) for k, neighbours in rot.items()}
+        if v in out.get(u, []):
+            out[u].remove(v)
+        if u in out.get(v, []):
+            out[v].remove(u)
+        return out
+
+    current_rotation = copy.deepcopy(rotation)
+    extras: List[Tuple[Any, Any]] = []
+    current_genus = _genus(current_rotation)
+
+    while current_genus > 0 and len(extras) < max_extras:
+        best_edge: Optional[Tuple[Any, Any]] = None
+        best_genus = current_genus
+        for edge in _enumerate_edges(current_rotation):
+            test_rotation = _remove_edge_from_rotation(current_rotation, edge)
+            test_genus = _genus(test_rotation)
+            if test_genus < best_genus:
+                best_genus = test_genus
+                best_edge = edge
+                if test_genus == 0:
+                    break                    # found a planarising edge; stop early
+
+        if best_edge is None:
+            # Greedy is stuck: no single edge removal reduces genus.
+            # This can happen on dense-non-planar graphs where multiple
+            # simultaneous removals are needed. The caller gets a partial
+            # extras list and can either accept it (HybridDecomposition
+            # still gives an exact result if a planar residual emerges
+            # in some branch) or fall back to brute force.
+            break
+
+        extras.append(best_edge)
+        current_rotation = _remove_edge_from_rotation(current_rotation, best_edge)
+        current_genus = best_genus
+
+    return extras
 
 
 # ---------------------------------------------------------------------------
@@ -369,24 +494,43 @@ class HybridDecomposition:
     """
     name = "HybridDecomposition"
 
-    def __init__(self, extra_edges: List[Tuple[Any, Any]]):
-        """`extra_edges` is the set of "make-non-planar" edges. The
-        remaining edges of the input graph must form a planar embedding
-        (the caller is responsible for choosing the extra set; v0.2 will
-        ship an auto-detection helper)."""
-        # Store as a list of normalised (u, v) tuples (sorted endpoints
-        # for hashability).
-        self.extra_edges: List[Tuple[Any, Any]] = [
-            tuple(sorted([u, v], key=str)) for (u, v) in extra_edges
-        ]
+    def __init__(self, extra_edges: Optional[List[Tuple[Any, Any]]] = None,
+                  *, auto: bool = False, max_auto_extras: int = 6):
+        """Construct a HybridDecomposition with either an explicit extra-edge
+        set or an auto-detected one.
+
+        Args:
+          extra_edges: the "make-non-planar" edge set the user identifies.
+            Ignored when `auto=True`.
+          auto: when True, the reduction's `apply()` calls `auto_detect_extras`
+            on the input's rotation system to discover a planarising extra-
+            edge set on the fly. Useful when the user doesn't know which
+            edges make their graph non-planar.
+          max_auto_extras: hard cap on the auto-discovered extras count
+            (caps the `2^|extras|` HybridDecomposition cost).
+        """
+        if auto:
+            # Auto-detected: extras will be filled in at apply() time.
+            self.extra_edges: List[Tuple[Any, Any]] = []
+            self._auto = True
+            self._max_auto_extras = max_auto_extras
+        else:
+            self.extra_edges = [
+                tuple(sorted([u, v], key=str)) for (u, v) in (extra_edges or [])
+            ]
+            self._auto = False
+            self._max_auto_extras = max_auto_extras
 
     def applies_to(self, problem: Any) -> bool:
         """Applies if `problem` is a graph dict with vertices, edges, and
-        every declared extra edge is in the graph."""
+        every declared extra edge is in the graph. Auto-mode requires the
+        rotation system too."""
         if not isinstance(problem, dict):
             return False
         if "vertices" not in problem or "edges" not in problem:
             return False
+        if self._auto:
+            return "rotation" in problem
         edge_set = {tuple(sorted([u, v], key=str)) for (u, v) in problem["edges"]}
         return all(e in edge_set for e in self.extra_edges)
 
@@ -394,8 +538,14 @@ class HybridDecomposition:
         if not self.applies_to(problem):
             raise ReductionNotApplicable(
                 f"{self.name}: problem is not a graph dict with the expected "
-                f"extra edges. Provide {{'vertices': ..., 'edges': ..., "
-                f"'rotation': ...}} where every extra edge is in 'edges'."
+                f"shape. Provide {{'vertices': ..., 'edges': ..., "
+                f"'rotation': ...}} where every extra edge is in 'edges' "
+                f"(or set auto=True and provide 'rotation')."
+            )
+        # Auto-mode: discover the extras from the rotation system now.
+        if self._auto:
+            self.extra_edges = auto_detect_extras(
+                problem["rotation"], max_extras=self._max_auto_extras,
             )
         # Build the list of (sub-graph, contribution-weight) pairs by
         # enumerating 2^|extra| subsets. Each subset describes which
@@ -493,4 +643,5 @@ __all__ = [
     "HighDegreeVertexSplit",
     "HybridDecomposition",
     "RationaliseWeights",
+    "auto_detect_extras",
 ]

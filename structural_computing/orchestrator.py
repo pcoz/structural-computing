@@ -77,6 +77,25 @@ class NoKnownReduction(RuntimeError):
 
 
 @dataclasses.dataclass
+class WorkflowStep:
+    """One step in the Orchestrator's evaluation workflow.
+
+    Attributes:
+      phase: which orchestrator phase this step belongs to (normalise,
+        classify, direct-dispatch, hint-driven, auto-hybrid, reduction,
+        recurse, honest-stop).
+      action: short description of what the orchestrator did at this step.
+      outcome: "ok" / "skipped" / "failed" / "honest-stop" or similar.
+      detail: optional free-form text (e.g., the reduction name applied,
+        the count of sub-problems, the exception message).
+    """
+    phase: str
+    action: str
+    outcome: str
+    detail: str = ""
+
+
+@dataclasses.dataclass
 class OrchestratorResult:
     """The Orchestrator's full answer including provenance.
 
@@ -87,12 +106,15 @@ class OrchestratorResult:
         problem in-family. Empty if the problem was in-family directly.
       sub_evaluations: count of how many leaf evaluations were performed.
       leaf_evaluator_used: name of the leaf evaluator used.
+      workflow_trace: list of WorkflowStep, one per orchestrator phase
+        that ran -- the audit trail of what the orchestrator tried.
     """
     answer: Any
     classification: Classification
     reductions_applied: List[str]
     sub_evaluations: int
     leaf_evaluator_used: str
+    workflow_trace: List[WorkflowStep] = dataclasses.field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -189,19 +211,31 @@ class Orchestrator:
                   hints: Optional[Dict[str, Any]] = None) -> OrchestratorResult:
         """Compute the answer to `question` on `problem`.
 
-        Algorithm:
-          1. Normalise the problem if it's a graph in a non-canonical
-             format (edge list / adjacency dict -> rotation system).
-          2. Classify it.
-          3. If (tier, question) is in the leaf registry, dispatch to
-             the leaf evaluator and return.
-          4. Else, try each registered reduction. The first one that
-             applies and produces in-family sub-problems wins; we
-             recurse on each sub-problem and combine via the
-             reduction's inverse.
-          5. If hints are provided (e.g. `extra_edges` for
-             HybridDecomposition), try the indicated reduction first.
-          6. If no reduction works, raise NoKnownReduction.
+        The Orchestrator's evaluation is organised as a SEQUENCE OF PHASES.
+        Each phase tries to make progress; if it succeeds, the orchestrator
+        terminates with the answer. If it fails, control passes to the next
+        phase. The phases are:
+
+          1. **Normalise** -- coerce edge-list / adjacency-dict inputs into
+             a canonical rotation-system graph dict.
+          2. **Classify** -- emit the structural Classification (tier,
+             in_family flag, meters, reasoning).
+          3. **Direct dispatch** -- if a leaf evaluator for (tier, question)
+             is registered AND the problem is in-family, call it directly.
+          4. **Hint-driven** -- if the user supplied `hints["extra_edges"]`,
+             try `HybridDecomposition` with those extras.
+          5. **Auto-Hybrid** -- if the question is "matching_count" and the
+             graph is non-planar but has a rotation system, try
+             `HybridDecomposition(auto=True)` (greedy extras discovery).
+          6. **Registered reductions** -- iterate the user-supplied
+             reductions in registration order; first applicable + successful
+             wins. Each sub-problem produced is re-classified and dispatched.
+          7. **Honest stop** -- raise NoKnownReduction with the full
+             workflow_trace attached.
+
+        Every step is recorded in `result.workflow_trace` as a `WorkflowStep`
+        with phase, action, outcome, and detail. The caller can inspect the
+        trace to understand exactly what the orchestrator tried.
 
         Args:
           problem: the input problem (graph, constraint set, signature).
@@ -212,92 +246,236 @@ class Orchestrator:
             `{"extra_edges": [...]}` to apply HybridDecomposition.
 
         Returns:
-          OrchestratorResult with the answer plus provenance.
+          OrchestratorResult with the answer + classification + provenance.
+
+        Raises:
+          NoKnownReduction: when no phase produces an answer. The
+            exception carries the classification (so the caller can
+            inspect which tier the problem landed in) and the list of
+            attempted reductions.
         """
         hints = hints or {}
+        workflow_trace: List[WorkflowStep] = []
+        reductions_applied: List[str] = []
 
-        # 1. Normalise graph inputs.
+        # ----- Phase 1: Normalise --------------------------------------
         normaliser = NormaliseGraphFormat()
-        normalised_notes: List[str] = []
         if normaliser.applies_to(problem):
-            normalisation = normaliser.apply(problem)
-            problem = normalisation.problem
-            normalised_notes.append(normaliser.name)
+            problem = normaliser.apply(problem).problem
+            reductions_applied.append(normaliser.name)
+            workflow_trace.append(WorkflowStep(
+                phase="normalise", action="NormaliseGraphFormat",
+                outcome="ok",
+                detail=f"vertices={len(problem.get('vertices', []))}, "
+                        f"edges={len(problem.get('edges', []))}",
+            ))
+        else:
+            workflow_trace.append(WorkflowStep(
+                phase="normalise", action="NormaliseGraphFormat",
+                outcome="skipped",
+                detail="input already in canonical form (or unsupported type)",
+            ))
 
-        # 2. Classify (graph case for now; constraint-set / signature
-        # would dispatch to other classifiers in v0.2).
+        # ----- Phase 2: Classify --------------------------------------
         if isinstance(problem, dict) and "rotation" in problem:
             cls = classify_graph(problem["rotation"])
+            workflow_trace.append(WorkflowStep(
+                phase="classify", action="classify_graph",
+                outcome="ok",
+                detail=f"tier={cls.tier}, in_family={cls.in_family}, "
+                        f"reasoning='{cls.reasoning}'",
+            ))
         else:
-            # Constraint-set / signature: outside v0.1's orchestrator
-            # focus; the StructuralComputer wrapper handles these
-            # directly. Future versions of the orchestrator will route
-            # those through the classifier dispatcher as well.
+            workflow_trace.append(WorkflowStep(
+                phase="classify", action="classify_graph",
+                outcome="failed",
+                detail="problem is not a graph dict with a rotation system",
+            ))
             raise NotImplementedError(
                 "Orchestrator currently handles graph problems only; "
                 "use StructuralComputer.count_solutions / .matchgate_rank "
                 "for constraint sets and signatures."
             )
 
-        attempted: List[str] = list(normalised_notes)
-
-        # 3. Direct dispatch to leaf evaluator if in-family.
+        # ----- Phase 3: Direct dispatch -------------------------------
         leaf = self.leaf_registry.get((cls.tier, question))
         if leaf is not None and cls.in_family:
             answer = leaf(problem, question)
+            workflow_trace.append(WorkflowStep(
+                phase="direct-dispatch", action=f"leaf_evaluator({cls.tier}, {question})",
+                outcome="ok",
+                detail=f"answer={answer!r}, evaluator={leaf.__name__}",
+            ))
             return OrchestratorResult(
                 answer=answer,
                 classification=cls,
-                reductions_applied=attempted,
+                reductions_applied=reductions_applied,
                 sub_evaluations=1,
                 leaf_evaluator_used=leaf.__name__,
+                workflow_trace=workflow_trace,
             )
+        workflow_trace.append(WorkflowStep(
+            phase="direct-dispatch", action=f"leaf_evaluator({cls.tier}, {question})",
+            outcome="skipped",
+            detail=(f"no leaf evaluator registered for ({cls.tier}, {question})"
+                    if leaf is None else "problem out-of-family"),
+        ))
 
-        # 4. Try a hint-supplied reduction first (the parametric case).
+        # ----- Phase 4: Hint-driven HybridDecomposition ---------------
         if "extra_edges" in hints and question == "matching_count":
-            attempted.append("HybridDecomposition(via hints)")
-            h = HybridDecomposition(hints["extra_edges"])
-            if h.applies_to(problem):
-                rresult = h.apply(problem)
-                # Each sub-problem is planar (assumption); the leaf
-                # evaluator for the matching_count question on planar
-                # gives an exact integer.
-                leaf = self.leaf_registry.get(("T2", "matching_count"))
-                if leaf is None:
-                    raise NoKnownReduction(cls, attempted)
-                sub_answers = [
-                    leaf(sp, question) for sp in rresult.problem["sub_problems"]
-                ]
-                final = rresult.inverse(sub_answers)
-                return OrchestratorResult(
-                    answer=final,
-                    classification=cls,
-                    reductions_applied=attempted,
-                    sub_evaluations=len(sub_answers),
-                    leaf_evaluator_used=leaf.__name__,
+            try:
+                result = self._try_hybrid_decomposition(
+                    problem, hints["extra_edges"], origin="hints",
                 )
+                workflow_trace.append(WorkflowStep(
+                    phase="hint-driven", action="HybridDecomposition(via hints)",
+                    outcome="ok",
+                    detail=f"answer={result['answer']!r}, "
+                            f"sub_evaluations={result['sub_evaluations']}",
+                ))
+                reductions_applied.append("HybridDecomposition(via hints)")
+                return OrchestratorResult(
+                    answer=result["answer"],
+                    classification=cls,
+                    reductions_applied=reductions_applied,
+                    sub_evaluations=result["sub_evaluations"],
+                    leaf_evaluator_used=result["leaf_evaluator_used"],
+                    workflow_trace=workflow_trace,
+                )
+            except (ReductionNotApplicable, NoKnownReduction) as e:
+                workflow_trace.append(WorkflowStep(
+                    phase="hint-driven", action="HybridDecomposition(via hints)",
+                    outcome="failed", detail=str(e),
+                ))
 
-        # 5. Try each registered (non-parametric) reduction.
+        # ----- Phase 5: Auto-Hybrid (greedy extras discovery) ---------
+        if question == "matching_count" and not cls.in_family and "rotation" in problem:
+            try:
+                h = HybridDecomposition(auto=True)
+                if h.applies_to(problem):
+                    rresult = h.apply(problem)
+                    if h.extra_edges:
+                        # Successful auto-discovery; evaluate sub-problems.
+                        result = self._evaluate_sub_problems(
+                            rresult.problem["sub_problems"], rresult, question,
+                        )
+                        workflow_trace.append(WorkflowStep(
+                            phase="auto-hybrid",
+                            action="HybridDecomposition(auto=True)",
+                            outcome="ok",
+                            detail=f"discovered {len(h.extra_edges)} extras; "
+                                    f"answer={result['answer']!r}; "
+                                    f"sub_evaluations={result['sub_evaluations']}",
+                        ))
+                        reductions_applied.append(
+                            f"HybridDecomposition(auto={len(h.extra_edges)})")
+                        return OrchestratorResult(
+                            answer=result["answer"],
+                            classification=cls,
+                            reductions_applied=reductions_applied,
+                            sub_evaluations=result["sub_evaluations"],
+                            leaf_evaluator_used=result["leaf_evaluator_used"],
+                            workflow_trace=workflow_trace,
+                        )
+                    else:
+                        workflow_trace.append(WorkflowStep(
+                            phase="auto-hybrid",
+                            action="HybridDecomposition(auto=True)",
+                            outcome="failed",
+                            detail="auto-detection found no planarising extras "
+                                    "(see auto_detect_extras docstring's 'Honest scope')",
+                        ))
+            except Exception as e:
+                workflow_trace.append(WorkflowStep(
+                    phase="auto-hybrid",
+                    action="HybridDecomposition(auto=True)",
+                    outcome="failed", detail=str(e),
+                ))
+
+        # ----- Phase 6: Registered reductions -------------------------
         for reduction in self.reductions:
-            if reduction is normaliser:  # already applied above
-                continue
-            attempted.append(reduction.name)
+            if reduction is normaliser:
+                continue                                # already applied
             if not reduction.applies_to(problem):
+                workflow_trace.append(WorkflowStep(
+                    phase="reduction", action=reduction.name,
+                    outcome="skipped", detail="not applicable to current problem",
+                ))
                 continue
-            # ... apply, recurse, combine. For v0.1, only NormaliseGraphFormat
-            # is in the default list (which doesn't change the in-family verdict),
-            # so the loop body doesn't actually fire here. v0.2 will add
-            # cost-driven search over the auto-applicable reductions
-            # (CrossingElimination, HighDegreeVertexSplit, etc.).
-            pass
+            try:
+                rresult = reduction.apply(problem)
+                result = self._evaluate_sub_problems(
+                    rresult.problem.get("sub_problems", []), rresult, question,
+                )
+                workflow_trace.append(WorkflowStep(
+                    phase="reduction", action=reduction.name, outcome="ok",
+                    detail=f"answer={result['answer']!r}",
+                ))
+                reductions_applied.append(reduction.name)
+                return OrchestratorResult(
+                    answer=result["answer"],
+                    classification=cls,
+                    reductions_applied=reductions_applied,
+                    sub_evaluations=result["sub_evaluations"],
+                    leaf_evaluator_used=result["leaf_evaluator_used"],
+                    workflow_trace=workflow_trace,
+                )
+            except (ReductionNotApplicable, NoKnownReduction, NotImplementedError) as e:
+                workflow_trace.append(WorkflowStep(
+                    phase="reduction", action=reduction.name,
+                    outcome="failed", detail=str(e),
+                ))
 
-        # 6. Honest stop.
-        raise NoKnownReduction(cls, attempted)
+        # ----- Phase 7: Honest stop -----------------------------------
+        workflow_trace.append(WorkflowStep(
+            phase="honest-stop", action="NoKnownReduction",
+            outcome="honest-stop",
+            detail=f"tier={cls.tier}, attempted={reductions_applied}",
+        ))
+        raise NoKnownReduction(cls, reductions_applied)
+
+    # -- Helpers ------------------------------------------------------------
+
+    def _try_hybrid_decomposition(self, problem, extra_edges, *, origin):
+        """Apply HybridDecomposition with the given extras; evaluate the
+        resulting sub-problems via the T2 leaf evaluator (planar). Returns
+        a dict with answer, sub_evaluations, leaf_evaluator_used."""
+        h = HybridDecomposition(extra_edges)
+        if not h.applies_to(problem):
+            raise ReductionNotApplicable(
+                f"HybridDecomposition({origin}) not applicable"
+            )
+        rresult = h.apply(problem)
+        return self._evaluate_sub_problems(
+            rresult.problem["sub_problems"], rresult, "matching_count",
+        )
+
+    def _evaluate_sub_problems(self, sub_problems, rresult, question):
+        """Evaluate each sub-problem produced by a reduction, then combine
+        via the reduction's inverse. Used by both hint-driven and
+        auto-Hybrid phases. Returns dict with answer, sub_evaluations,
+        leaf_evaluator_used."""
+        # The sub-problems should be in-family (T2 planar typically).
+        # Use the T2 leaf evaluator on each.
+        leaf = self.leaf_registry.get(("T2", question))
+        if leaf is None:
+            raise NoKnownReduction(
+                Classification(tier="T2", meters={}, in_family=True,
+                                 reasoning="reduction sub-problem"),
+                [f"no leaf evaluator for (T2, {question})"],
+            )
+        sub_answers = [leaf(sp, question) for sp in sub_problems]
+        return {
+            "answer": rresult.inverse(sub_answers),
+            "sub_evaluations": len(sub_answers),
+            "leaf_evaluator_used": leaf.__name__,
+        }
 
 
 __all__ = [
     "Orchestrator",
     "OrchestratorResult",
+    "WorkflowStep",
     "NoKnownReduction",
     "LeafEvaluator",
     "DEFAULT_LEAF_REGISTRY",

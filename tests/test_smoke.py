@@ -63,8 +63,10 @@ def test_public_api_complete():
         "Decomposition", "DecompositionPlan", "ShannonExpansion",
         "TreewidthBoundedDP", "PlanarSeparator", "RecursiveCircuitCut",
         # Orchestrator
-        "Orchestrator", "OrchestratorResult", "NoKnownReduction",
+        "Orchestrator", "OrchestratorResult", "WorkflowStep", "NoKnownReduction",
         "LeafEvaluator", "DEFAULT_LEAF_REGISTRY",
+        # Auto-detection
+        "auto_detect_extras",
     }
     actual = set(structural_computing.__all__) - {"__version__"}
     assert actual == expected, f"differences: {actual ^ expected}"

@@ -83,10 +83,12 @@ from .decompose import (
 from .orchestrator import (
     Orchestrator,
     OrchestratorResult,
+    WorkflowStep,
     NoKnownReduction,
     LeafEvaluator,
     DEFAULT_LEAF_REGISTRY,
 )
+from .transform import auto_detect_extras
 
 __all__ = [
     # Wrapper class (the main entry point)
@@ -148,9 +150,12 @@ __all__ = [
     # Orchestrator -- the top-level dispatcher
     "Orchestrator",
     "OrchestratorResult",
+    "WorkflowStep",
     "NoKnownReduction",
     "LeafEvaluator",
     "DEFAULT_LEAF_REGISTRY",
+    # Auto-detection helper for HybridDecomposition
+    "auto_detect_extras",
     # Version
     "__version__",
 ]
