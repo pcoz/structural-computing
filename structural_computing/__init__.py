@@ -68,6 +68,7 @@ from .compose import (
     LinearCombination,
     Projection,
     HolographicBasisPair,
+    HolographicBasisResult,
     BranchSum,
 )
 from .decompose import (
@@ -141,6 +142,7 @@ __all__ = [
     "LinearCombination",
     "Projection",
     "HolographicBasisPair",
+    "HolographicBasisResult",
     "BranchSum",
     # Recursive decomposition
     "Decomposition",

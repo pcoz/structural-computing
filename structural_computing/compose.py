@@ -150,68 +150,184 @@ class Projection:
 
 
 class HolographicBasisPair:
-    r"""Two matchgates with **coordinated bases** that, together, compute a
-    quantity neither could alone.
+    r"""A 2x2 invertible basis transformation applied to a symmetric
+    Holant signature, with a check (per Cai-Lu 2011 Theorem 2.5) that
+    the transformed signature is matchgate-realisable.
 
     This is Valiant 2004's central technique ("Holographic Algorithms"
     DOI 10.1109/FOCS.2004.40) and the engine behind most known
     holographic algorithms (Cai-Lu-Xia 2009 onwards). The mental model:
 
-      Given a 2x2 invertible "basis matrix" M, the same signature can be
-      "viewed in different bases" via the transformation
-      `sigma' = (M^(-1))^{⊗n} sigma M^{⊗n}`. A signature that is NOT
-      matchgate-realisable in the standard basis may BE matchgate-
-      realisable in a transformed basis -- and Valiant's "holographic"
-      argument is that this constitutes an EXACT poly-time algorithm
-      for the original problem.
+      Given a 2x2 invertible basis matrix T = ((p, q), (r, s)), the
+      same symmetric signature can be "viewed in different bases" via
+      the polynomial-substitution rule. Encode the symmetric signature
+      [z_0, ..., z_n] as the homogeneous polynomial
+        P(u, v) = sum_k C(n, k) z_k u^{n-k} v^k.
+      The basis change sends (u, v) -> (p u + r v, q u + s v), so
+        P'(u, v) = P(p u + r v, q u + s v),
+      and the new signature values are the coefficients of P' in the
+      same basis.
 
-    v0.1 ships only the **identity-basis no-op case**: if the supplied
-    basis matrix is the 2x2 identity, the basis pair is the trivial
-    (no transformation) one and `evaluate(sub_evaluator)` just calls
-    `sub_evaluator` on a marker problem and returns. This validates the
-    API surface; the substantive non-identity basis-change transformation
-    is the v0.2 deliverable that implements
-    `sigma' = M^{⊗n} ⋅ sigma`.
+      A symmetric signature is matchgate-realisable iff it satisfies a
+      LINEAR RECURRENCE OF ORDER 2 (Cai-Lu 2011 Theorem 2.5): there
+      exist a, b, c (not all zero) such that a z_k + b z_{k+1} +
+      c z_{k+2} = 0 for all valid k. The rank-check below decides this
+      in O(n) time.
 
-    For non-trivial basis changes today, the framework's user is expected
-    to manually transform their signature in the chosen basis and then
-    invoke the framework on the transformed signature. The full
-    automated v0.2 form will recognise when a basis change unlocks
-    matchgate-realisability and apply it transparently.
+    Use::
+
+        # Apply a Hadamard-style basis to a non-matchgate symmetric
+        # signature and check whether the transformed signature lands
+        # in the matchgate family.
+        T = np.array([[1, 1], [1, -1]], dtype=float)
+        h = HolographicBasisPair(basis_matrix=T)
+        result = h.transform_signature([1, 0, 0, 1])     # 3-AND signature
+        # -> if the transformed signature satisfies the order-2 recurrence,
+        #    `result.is_realisable` is True and the transformed values are
+        #    in `result.values`.
+
+    Caveats (honest scope for v0.2):
+      * Symmetric signatures only. General (non-symmetric) signatures
+        require the full tensor-power T^{⊗a} on a 2^a-dim space; the
+        polynomial-substitution shortcut here doesn't apply.
+      * Numerical rank check over R/C with tunable tolerance. Modular /
+        finite-field exact checks are a v0.3 extension.
+      * The user supplies T explicitly. Auto-discovery of a basis on
+        which a given signature becomes matchgate-realisable -- the full
+        Cai-Lu Simultaneous Realisability Problem -- is also v0.3.
     """
     name = "HolographicBasisPair"
 
-    def __init__(self, basis_matrix=None):
-        """`basis_matrix` is the 2x2 invertible matrix M defining the
-        basis change. v0.1 only supports the 2x2 identity matrix
-        (no-op case); other matrices raise NotImplementedError pending
-        the v0.2 Valiant-2004 transformation implementation."""
+    def __init__(self, basis_matrix=None, *, tol: float = 1e-10):
+        """`basis_matrix` is the 2x2 invertible matrix T defining the
+        basis change. `tol` is the numerical tolerance for the rank
+        check that decides matchgate-realisability."""
         self.basis_matrix = basis_matrix
+        self.tol = tol
 
-    def evaluate(self, sub_evaluator):
+    def _validated_T(self):
         import numpy as np
         if self.basis_matrix is None:
             raise ValueError(
-                f"{self.name}: specify a 2x2 invertible basis_matrix. "
-                f"v0.1 only supports the identity (no-op)."
+                f"{self.name}: specify a 2x2 invertible basis_matrix."
             )
-        M = np.asarray(self.basis_matrix, dtype=float)
-        if M.shape != (2, 2):
+        T = np.asarray(self.basis_matrix, dtype=float)
+        if T.shape != (2, 2):
             raise ValueError(
-                f"{self.name}: basis_matrix must be 2x2; got shape {M.shape}"
+                f"{self.name}: basis_matrix must be 2x2; got shape {T.shape}"
             )
-        if np.allclose(M, np.eye(2)):
-            # The trivial case: identity basis is no transformation.
-            # The "sub_problem" is just a marker; the user's
-            # sub_evaluator is expected to handle it.
-            return sub_evaluator({"identity_basis": True,
-                                    "note": "no transformation -- evaluate signature in the natural basis"})
-        raise NotImplementedError(
-            f"{self.name} with non-identity basis is on the v0.2 roadmap. "
-            f"See Valiant 2004 ('Holographic Algorithms', DOI 10.1109/FOCS.2004.40) "
-            f"for the transformation; full implementation requires the basis-change "
-            f"machinery that the framework will gain in v0.2."
+        if abs(np.linalg.det(T)) < self.tol:
+            raise ValueError(
+                f"{self.name}: basis_matrix must be invertible "
+                f"(det = {np.linalg.det(T)})"
+            )
+        return T
+
+    def transform_signature(self, values):
+        """Apply this composition's basis matrix to the symmetric
+        signature `values` and return a :class:`HolographicBasisResult`
+        carrying the transformed values + matchgate-realisability flag.
+
+        For a symmetric signature [z_0, ..., z_n] under T = ((p, q), (r, s)):
+
+            z'_k = sum_{i=0..k, j=0..n-k}
+                       C(k, i) C(n-k, j) p^i q^{k-i} r^j s^{n-k-j} z_{i+j}
+
+        This is the polynomial-substitution rule applied to the
+        symmetric encoding P(u, v) = sum_k C(n, k) z_k u^{n-k} v^k
+        under (u, v) -> (p u + r v, q u + s v).
+        """
+        import math
+        T = self._validated_T()
+        n = len(values) - 1
+        p, q = T[0, 0], T[0, 1]
+        r, s = T[1, 0], T[1, 1]
+        # Apply the basis transformation symmetrically.
+        new_values = [0.0] * (n + 1)
+        for k in range(n + 1):
+            for i in range(k + 1):
+                for j in range(n - k + 1):
+                    src = i + j
+                    if src > n:
+                        continue
+                    coeff = (math.comb(k, i) * math.comb(n - k, j)
+                              * (p ** i) * (q ** (k - i))
+                              * (r ** j) * (s ** (n - k - j)))
+                    new_values[k] += coeff * float(values[src])
+        is_real, recurrence = self._matchgate_realisable(new_values)
+        return HolographicBasisResult(
+            values=new_values,
+            is_realisable=is_real,
+            recurrence_coefficients=recurrence,
+            basis_matrix=T,
         )
+
+    def _matchgate_realisable(self, values):
+        """Check whether `values` satisfies a linear recurrence of order
+        2 (Cai-Lu 2011 Theorem 2.5). Returns (is_realisable,
+        (a, b, c)) where (a, b, c) is one non-trivial kernel vector
+        when realisable, else None."""
+        import numpy as np
+        n = len(values) - 1
+        if n < 2:
+            return True, None
+        # Build the (n-1) x 3 matrix M[k, :] = [z_k, z_{k+1}, z_{k+2}].
+        M = np.array(
+            [[values[k], values[k + 1], values[k + 2]] for k in range(n - 1)],
+            dtype=float,
+        )
+        rank = int(np.linalg.matrix_rank(M, tol=self.tol))
+        if rank < 3:
+            # Find a kernel vector via SVD (right singular vector with
+            # smallest singular value).
+            _, _, Vt = np.linalg.svd(M)
+            kernel = Vt[-1]
+            return True, tuple(kernel.tolist())
+        return False, None
+
+    def evaluate(self, sub_evaluator):
+        """Apply the basis transformation to a Holant-style problem
+        with a symmetric signature, and dispatch to the sub-evaluator
+        on the TRANSFORMED problem.
+
+        The sub-evaluator receives a problem of the form
+        ``{"values": <transformed_signature>}`` plus the transformation
+        metadata. The composition's Holant value equals the
+        sub-evaluator's value on the transformed signature (no
+        multiplicative correction needed -- that's the content of
+        Valiant's Holant Theorem).
+        """
+        import numpy as np
+        T = self._validated_T()
+        if np.allclose(T, np.eye(2), atol=self.tol):
+            # Trivial identity case: no transformation, just dispatch.
+            return sub_evaluator({"identity_basis": True,
+                                  "note": "no transformation -- evaluate signature in the natural basis"})
+        raise NotImplementedError(
+            f"{self.name}.evaluate() with non-identity basis requires a "
+            f"sub_evaluator that takes a transformed-signature problem; "
+            f"use transform_signature() directly to get the new values "
+            f"and route them through the orchestrator separately."
+        )
+
+
+@dataclasses.dataclass
+class HolographicBasisResult:
+    """Result of a HolographicBasisPair.transform_signature call.
+
+    Attributes:
+      values: the transformed signature values [z'_0, ..., z'_n].
+      is_realisable: True iff the transformed signature satisfies the
+        Cai-Lu 2011 order-2 recurrence (matchgate-realisable).
+      recurrence_coefficients: when realisable, the (a, b, c) kernel
+        vector such that a z'_k + b z'_{k+1} + c z'_{k+2} = 0; None
+        otherwise.
+      basis_matrix: the 2x2 matrix T applied.
+    """
+    values: List[float]
+    is_realisable: bool
+    recurrence_coefficients: Optional[Any]
+    basis_matrix: Any
 
 
 class BranchSum:

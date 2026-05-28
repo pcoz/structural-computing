@@ -73,9 +73,70 @@ def test_holographic_basis_pair_identity_passes_through():
                               "note": "no transformation -- evaluate signature in the natural basis"}]
 
 
-def test_holographic_basis_pair_non_identity_is_v02():
-    """A non-identity basis raises NotImplementedError pending Valiant 2004."""
-    hbp = HolographicBasisPair(basis_matrix=np.array([[1, 1], [0, 1]]))
+def test_holographic_basis_pair_transform_identity_signature():
+    """Identity basis on a signature returns the same signature."""
+    hbp = HolographicBasisPair(basis_matrix=np.eye(2))
+    r = hbp.transform_signature([1, 0, 1, 0])
+    assert [round(v, 9) for v in r.values] == [1, 0, 1, 0]
+    assert r.is_realisable is True
+
+
+def test_holographic_basis_pair_hadamard_on_3and():
+    """The 3-AND signature [1, 0, 0, 1] is matchgate-realisable on some
+    basis (Cai-Lu 2011 Theorem 2.5 -- every arity-3 signature is, since
+    the order-2 recurrence over 4 values has 2 equations in 3 unknowns).
+    The Hadamard basis makes the realising form concrete: it transforms
+    the signature to [0, 2, 0, 2], which is the standard-basis matchgate
+    form (alternating-zero with geometric progression on the non-zero
+    indices)."""
+    T = np.array([[1, 1], [1, -1]], dtype=float)
+    hbp = HolographicBasisPair(basis_matrix=T)
+    r = hbp.transform_signature([1, 0, 0, 1])
+    # Transformed values: [0, 2, 0, 2] (matchgate-standard form).
+    assert [round(v, 9) for v in r.values] == [0, 2, 0, 2]
+    assert r.is_realisable is True
+
+
+def test_holographic_basis_pair_rejects_truly_non_realisable_signature():
+    """At arity 4 the recurrence matrix is 3x3, so signatures with rank-3
+    matrices are NOT matchgate-realisable on any basis. Example: the
+    arity-4 signature [1, 0, 1, 0, 2] -- the 3x3 recurrence matrix has
+    determinant 1, so rank 3, so not realisable."""
+    hbp = HolographicBasisPair(basis_matrix=np.eye(2))
+    r = hbp.transform_signature([1, 0, 1, 0, 2])
+    assert r.is_realisable is False
+    assert r.recurrence_coefficients is None
+
+
+def test_holographic_basis_pair_nae3_realisable_as_is():
+    """The NAE-3 signature [0, 1, 1, 0] is matchgate-realisable in the
+    standard basis (Cai-Lu 2011 §6.1 example). The recurrence check
+    confirms this without any basis transformation."""
+    hbp = HolographicBasisPair(basis_matrix=np.eye(2))
+    r = hbp.transform_signature([0, 1, 1, 0])
+    assert r.is_realisable is True
+    # The recurrence is (a, b, c) such that a z_0 + b z_1 + c z_2 = 0,
+    # so b = -c (from a*0 + b*1 + c*1 = 0) and similarly. Don't pin the
+    # exact coefficients (they come from SVD), just check the recurrence
+    # is satisfied.
+    a, b, c = r.recurrence_coefficients
+    values = [0, 1, 1, 0]
+    for k in range(2):
+        assert abs(a * values[k] + b * values[k + 1] + c * values[k + 2]) < 1e-9
+
+
+def test_holographic_basis_pair_rejects_singular_matrix():
+    """A singular basis matrix raises ValueError."""
+    with pytest.raises(ValueError):
+        hbp = HolographicBasisPair(basis_matrix=np.ones((2, 2)))
+        hbp.transform_signature([1, 0])
+
+
+def test_holographic_basis_pair_evaluate_non_identity_directs_to_transform():
+    """evaluate() with a non-identity basis tells the user to use
+    transform_signature() directly. This keeps the orchestrator's
+    contract simple while making the substantive transform reachable."""
+    hbp = HolographicBasisPair(basis_matrix=np.array([[1, 1], [1, -1]]))
     with pytest.raises(NotImplementedError):
         hbp.evaluate(lambda p: 0)
 

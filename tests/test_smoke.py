@@ -59,7 +59,7 @@ def test_public_api_complete():
         "HybridDecomposition", "RationaliseWeights",
         # Compositions
         "Composition", "CompositionPlan", "LinearCombination",
-        "Projection", "HolographicBasisPair", "BranchSum",
+        "Projection", "HolographicBasisPair", "HolographicBasisResult", "BranchSum",
         # Recursive decomposition
         "Decomposition", "DecompositionPlan", "ShannonExpansion",
         "TreewidthBoundedDP", "PlanarSeparator", "RecursiveCircuitCut",
