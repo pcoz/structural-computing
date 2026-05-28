@@ -64,13 +64,25 @@ class Decomposition(Protocol):
 
 @dataclasses.dataclass
 class DecompositionPlan:
-    """A node of the decomposition tree. Leaves have `children = []`;
-    internal nodes carry a `combine` that merges child answers."""
+    """A node of the decomposition tree.
+
+    Three modes:
+      - Leaf with a problem: `is_leaf=True` and `evaluate()` calls
+        `leaf_evaluator(self.problem)`.
+      - Internal node: has `children`; `evaluate()` recurses on children
+        and combines their answers via `combine(child_values)`.
+      - Precomputed: `has_precomputed_value=True` and `evaluate()` returns
+        `precomputed_value` directly without calling leaf_evaluator. Used
+        when the decomposition itself computed the answer (e.g.,
+        Bodlaender-style DP that doesn't need a separate leaf evaluator).
+    """
     problem: Any
     children: List["DecompositionPlan"] = dataclasses.field(default_factory=list)
     combine: Callable[[List[Any]], Any] = lambda values: values[0] if values else None
     label: str = ""
     notes: str = ""
+    has_precomputed_value: bool = False
+    precomputed_value: Any = None
 
     @property
     def is_leaf(self) -> bool:
@@ -79,7 +91,10 @@ class DecompositionPlan:
     def evaluate(self, leaf_evaluator: Callable[[Any], Any]) -> Any:
         """Walk the tree, evaluate each leaf via `leaf_evaluator`, then
         combine the children's answers at each internal node up to the
-        root."""
+        root. If the plan has a precomputed value, return it directly
+        without traversing."""
+        if self.has_precomputed_value:
+            return self.precomputed_value
         if self.is_leaf:
             return leaf_evaluator(self.problem)
         child_values = [c.evaluate(leaf_evaluator) for c in self.children]
@@ -242,11 +257,198 @@ class TreewidthBoundedDP:
                 label="root-bag (single-bag decomposition)",
             )
             return leaf
-        raise NotImplementedError(
-            f"{self.name}: multi-bag tree decomposition is on the v0.2 roadmap. "
-            f"The standard Bodlaender / Korhonen matching-count DP applies; "
-            f"see admissibility-geometry/proposals/reductions_compositions_recursive_decomposition.md"
-        )
+
+        # Multi-bag tree decomposition: run the Bodlaender-style DP.
+        # We return a special "decomposition plan" whose evaluate()
+        # function performs the full DP and returns the matching count.
+        return _build_multibag_plan(problem, td)
+
+
+def _build_multibag_plan(problem: Any, td: dict) -> "DecompositionPlan":
+    r"""Build a DecompositionPlan whose evaluator runs the multi-bag DP.
+
+    The Bodlaender DP for perfect-matching count: at each bag B, the
+    DP state is a SUBSET `S` of B representing "vertices in B that are
+    already matched (via edges in the sub-tree rooted at this bag)."
+    The DP value `dp[B][S]` is the number of (partial) matchings of the
+    sub-graph induced by the bags in B's subtree such that B's "matched
+    boundary" is exactly S.
+
+    The DP transitions:
+
+      Leaf bag (single child or none): enumerate internal matchings on
+        B; for each, S is the matched-vertex set.
+
+      Internal bag B with children C_1, ..., C_k:
+        - For each combination of child states (S_1, ..., S_k):
+            - For each vertex v in C_i \ B (forgotten): S_i MUST contain v
+              (otherwise v ends up never matched, violating perfect matching).
+            - For each shared vertex v in B ∩ C_i: v's matched status in
+              S agrees with S_i.
+        - Then within B we can match pairs of vertices in B that are
+          not yet matched by any child; enumerate those internal matchings.
+
+    At the ROOT bag, the answer is `dp[root][V(root)]` -- every vertex
+    in the root bag is matched. For the global matching count we want
+    `sum over S where S = V(root)` of dp[root][S].
+
+    Implementation note: this is a STRAIGHTFORWARD-not-optimised
+    implementation. Cost is `O(2^{2w} * n)` where `w = max bag size`;
+    for w=O(log n) it's polynomial. Production-quality implementations
+    use nice tree decompositions with introduce/forget/join nodes
+    explicitly; we just iterate over the user's tree directly.
+    """
+    bags: List[Set[Any]] = [set(b) for b in td["bags"]]
+    tree_edges: List[Tuple[int, int]] = list(td.get("tree_edges", []))
+    root_idx: int = int(td.get("root_bag_index", 0))
+    n_bags = len(bags)
+    # Build adjacency: child relation parented at root_idx.
+    adj: Dict[int, List[int]] = {i: [] for i in range(n_bags)}
+    for (i, j) in tree_edges:
+        adj[i].append(j)
+        adj[j].append(i)
+    # Root the tree at root_idx via BFS/DFS.
+    parent: Dict[int, Optional[int]] = {root_idx: None}
+    children: Dict[int, List[int]] = {i: [] for i in range(n_bags)}
+    stack = [root_idx]
+    visited = {root_idx}
+    while stack:
+        u = stack.pop()
+        for v in adj[u]:
+            if v not in visited:
+                visited.add(v)
+                parent[v] = u
+                children[u].append(v)
+                stack.append(v)
+    # Post-order traversal for bottom-up DP.
+    post_order: List[int] = []
+    seen = set()
+    stack = [(root_idx, False)]
+    while stack:
+        node, processed = stack.pop()
+        if processed:
+            post_order.append(node)
+        else:
+            if node in seen:
+                continue
+            seen.add(node)
+            stack.append((node, True))
+            for child in children[node]:
+                stack.append((child, False))
+
+    # All edges of G as a set for quick lookup.
+    g_edges: Set[Tuple[Any, Any]] = set()
+    for (u, v) in problem["edges"]:
+        g_edges.add(tuple(sorted([u, v], key=str)))
+
+    def _bag_internal_matchings(bag: Set[Any]) -> List[Set[Any]]:
+        """All possible partial matchings using edges strictly inside `bag`.
+        Returns a list of sets of matched vertices, one per matching.
+
+        Each matching is enumerated exactly once via a recursion that at
+        each step either (a) pairs `remaining[0]` with some `w` in
+        `remaining[1:]` via an edge of G, or (b) leaves `remaining[0]`
+        unmatched and recurses on `remaining[1:]`."""
+        bag_list = list(bag)
+        results: List[Set[Any]] = []
+        def recurse(remaining: List[Any], matched: Set[Any]) -> None:
+            if not remaining:
+                results.append(set(matched))
+                return
+            v = remaining[0]
+            # (a) Pair v with each compatible w.
+            for i, w in enumerate(remaining[1:], start=1):
+                edge = tuple(sorted([v, w], key=str))
+                if edge in g_edges:
+                    new_remaining = remaining[1:i] + remaining[i + 1:]
+                    recurse(new_remaining, matched | {v, w})
+            # (b) Leave v unmatched.
+            recurse(remaining[1:], matched)
+        recurse(bag_list, set())
+        return results
+
+    # DP: dp[bag_idx][frozenset(matched_vertices_in_bag)] -> count
+    dp: Dict[int, Dict[frozenset, int]] = {}
+
+    for bag_idx in post_order:
+        bag = bags[bag_idx]
+        if not children[bag_idx]:
+            # Leaf bag.
+            states: Dict[frozenset, int] = {}
+            for matching in _bag_internal_matchings(bag):
+                key = frozenset(matching)
+                states[key] = states.get(key, 0) + 1
+            dp[bag_idx] = states
+            continue
+        # Internal bag: combine children's states.
+        # Start with a single state where nothing is matched yet, count 1.
+        combined: Dict[frozenset, int] = {frozenset(): 1}
+        for child in children[bag_idx]:
+            child_states = dp[child]
+            child_bag = bags[child]
+            forgotten = child_bag - bag                  # vertices in child but not B
+            shared = child_bag & bag
+            new_combined: Dict[frozenset, int] = {}
+            for (current_set, current_count) in combined.items():
+                for (child_set, child_count) in child_states.items():
+                    # Forgotten vertices MUST be matched.
+                    if not forgotten.issubset(child_set):
+                        continue
+                    # On shared vertices, the child's matched status must agree
+                    # with what we know about B's matched status so far. If a
+                    # shared vertex is in current_set, the child must also have
+                    # it matched -- else we'd double-count its matching status.
+                    # If a shared vertex is in child_set but NOT in current_set,
+                    # we incorporate it (the child's subtree matched it).
+                    # Disagreement (vertex in current_set but NOT in child_set,
+                    # for vertices in shared) is invalid.
+                    conflict = False
+                    for v in shared:
+                        if v in current_set and v not in child_set:
+                            conflict = True; break
+                    if conflict:
+                        continue
+                    # Merge: union of current_set (excluding forgotten -- they're
+                    # no longer in B) with the new matched-in-bag info from child.
+                    merged = (current_set | (child_set & bag))
+                    new_combined[merged] = (
+                        new_combined.get(merged, 0)
+                        + current_count * child_count
+                    )
+            combined = new_combined
+        # Now for each state in `combined`, we can ADDITIONALLY match
+        # pairs of vertices in `bag` that aren't yet matched -- using
+        # edges of G inside the bag.
+        states_with_internal: Dict[frozenset, int] = {}
+        for (matched_so_far, count) in combined.items():
+            available = bag - matched_so_far
+            for additional_matching in _bag_internal_matchings(available):
+                # additional_matching is the new set of matched vertices
+                # added by within-bag pairing.
+                final_set = matched_so_far | additional_matching
+                states_with_internal[final_set] = (
+                    states_with_internal.get(final_set, 0) + count
+                )
+        dp[bag_idx] = states_with_internal
+
+    # The answer at the root: sum of counts for states where the FULL set
+    # of root-bag vertices is matched (all root vertices are in a matching).
+    root_bag = bags[root_idx]
+    # For PERFECT matching: every vertex of G must be matched. The root's
+    # bag may not be all of V(G); we need to check the matched set IS the
+    # full root bag (which then propagates to having matched everything,
+    # since forgotten vertices were required to be matched at each step).
+    total = dp[root_idx].get(frozenset(root_bag), 0)
+
+    # Wrap the precomputed total in a DecompositionPlan that returns it
+    # directly when evaluate() is called -- no leaf-evaluator dispatch.
+    return DecompositionPlan(
+        problem=None,
+        has_precomputed_value=True,
+        precomputed_value=total,
+        label=f"multi-bag DP ({n_bags} bags, max width {max(len(b) for b in bags) - 1})",
+        notes=f"matching count = {total}",
+    )
 
 
 class PlanarSeparator:
