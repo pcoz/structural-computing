@@ -409,6 +409,32 @@ def _matchgate_realisation_leaf(problem: Any, question: str) -> Dict[str, Any]:
     return h.apply(problem).problem
 
 
+def _holographic_transform_general_leaf(problem: Any, question: str) -> Dict[str, Any]:
+    """holographic_transform on a GENERAL (non-symmetric) signature:
+    apply ``T^{otimes a}`` to the length-2^arity values tensor.
+    The problem dict must carry ``values`` (length ``2**arity``),
+    ``arity`` (int), and ``basis_matrix`` (2x2 invertible). Returns
+    ``{"values": transformed, "arity": arity, "basis_matrix": T}``."""
+    from .compose import HolographicBasisPair as _HBP
+    if not isinstance(problem, dict):
+        raise ValueError("holographic_transform_general_leaf expects a dict")
+    required = {"values", "arity", "basis_matrix"}
+    missing = required - set(problem.keys())
+    if missing:
+        raise ValueError(
+            f"holographic_transform_general_leaf: missing keys {missing}"
+        )
+    hbp = _HBP(basis_matrix=problem["basis_matrix"])
+    result = hbp.transform_signature_general(
+        problem["values"], arity=int(problem["arity"]),
+    )
+    return {
+        "values":       result.values,
+        "arity":        int(problem["arity"]),
+        "basis_matrix": result.basis_matrix.tolist(),
+    }
+
+
 # ---------- The default registry (covers everything reachable in v0.2) -----
 
 DEFAULT_LEAF_REGISTRY: Dict[Tuple[str, str], LeafEvaluator] = {
@@ -439,6 +465,8 @@ DEFAULT_LEAF_REGISTRY: Dict[Tuple[str, str], LeafEvaluator] = {
     ("T3", "classify_function"):         _classify_function_leaf,
     ("T2", "matchgate_realisation"):     _matchgate_realisation_leaf,
     ("T3", "matchgate_realisation"):     _matchgate_realisation_leaf,
+    # General (non-symmetric) holographic transform on a 2^a tensor.
+    ("T3", "holographic_transform_general"): _holographic_transform_general_leaf,
 }
 
 
@@ -931,6 +959,22 @@ class Orchestrator:
                 modulus=problem.get("modulus", 2),
             ), "classify_constraint_set")
         if "values" in problem:
+            # GENERAL (non-symmetric) signature: length-2^arity tensor
+            # plus explicit arity AND basis_matrix. Route to T3 with a
+            # "general=True" meter so the holographic_transform_general
+            # leaf can fire.
+            if ("arity" in problem and "basis_matrix" in problem
+                    and len(problem["values"]) == 2 ** int(problem["arity"])):
+                return (Classification(
+                    tier="T3",
+                    meters={"arity": int(problem["arity"]),
+                            "general": True,
+                            "n_values": len(problem["values"])},
+                    in_family=True,
+                    reasoning=(f"general (non-symmetric) signature of "
+                                f"arity {problem['arity']} "
+                                f"on a 2^a-dim tensor"),
+                ), "classify_signature_general")
             return classify_signature(problem["values"]), "classify_signature"
         return None, ""
 

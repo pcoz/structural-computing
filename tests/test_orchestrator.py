@@ -242,6 +242,25 @@ def test_orchestrator_skips_rationalise_when_weights_already_integer():
     assert ("rationalise", "skipped") in phases_and_outcomes
 
 
+def test_orchestrator_holographic_transform_general_routes_via_t3():
+    """A general (non-symmetric) signature problem with explicit arity
+    and basis_matrix routes through the new T3 classifier branch to
+    _holographic_transform_general_leaf, which applies T^{otimes a}."""
+    import numpy as np
+    orch = Orchestrator()
+    problem = {
+        "values": [1, 0, 0, 0, 0, 0, 0, 0],            # delta_000
+        "arity": 3,
+        "basis_matrix": [[1, 1], [1, -1]],                # Hadamard
+    }
+    r = orch.evaluate(problem, question="holographic_transform_general")
+    # H^{otimes 3} applied to delta_000 is the uniform tensor.
+    np.testing.assert_allclose(r.answer["values"], [1.0] * 8, atol=1e-9)
+    assert r.classification.tier == "T3"
+    assert r.classification.meters["general"] is True
+    assert r.leaf_evaluator_used == "_holographic_transform_general_leaf"
+
+
 def test_orchestrator_emits_predict_step_when_calibrated():
     """When calibration is loaded for (tier, question), the orchestrator
     emits a 'predict' workflow step before direct dispatch, surfacing

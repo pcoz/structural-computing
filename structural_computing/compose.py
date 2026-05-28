@@ -286,6 +286,89 @@ class HolographicBasisPair:
         return False, None
 
     # -----------------------------------------------------------------
+    # Non-symmetric (general-tensor) basis transformation (v0.3)
+    # -----------------------------------------------------------------
+    #
+    # The symmetric `transform_signature` uses the polynomial-substitution
+    # shortcut, which only works because a symmetric signature is fully
+    # described by its (n+1) Hamming-weight-indexed values. For a
+    # GENERAL signature -- an arbitrary 2^a-dim tensor indexed by
+    # bitstrings -- the basis transformation is the full tensor power:
+    #
+    #     sigma'[beta] = sum_{alpha in {0,1}^a} (prod_i T[beta_i, alpha_i]) * sigma[alpha]
+    #
+    # i.e., apply T to each of the `a` wires independently. Implemented
+    # as `a` sequential 2x2 contractions on a length-a tensor of shape
+    # (2, 2, ..., 2), so the cost is O(a * 2^a) rather than the naive
+    # O(2^{2a}).
+    # -----------------------------------------------------------------
+
+    def transform_signature_general(self,
+                                      values: Sequence[float],
+                                      arity: int) -> "HolographicBasisResult":
+        r"""Apply ``T^{otimes a}`` to a general (possibly non-symmetric)
+        signature.
+
+        ``values`` is a flat array of length ``2^arity`` indexed by
+        bitstrings ``alpha in {0,1}^arity`` (interpreted as integers
+        ``0..2^arity - 1`` in standard binary, bit 0 = LSB).
+
+        The transformation rule:
+
+            sigma'[beta] = sum_{alpha} (prod_i T[beta_i, alpha_i]) sigma[alpha]
+
+        is the full tensor-power action of T on each wire. For
+        SYMMETRIC signatures, use :meth:`transform_signature` instead
+        -- it's much cheaper because it exploits the symmetry to do
+        the work in (a+1)-dim coefficient space rather than the full
+        2^a-dim tensor.
+
+        Args:
+          values: length-``2^arity`` flat array.
+          arity: number of wires; ``len(values)`` must equal ``2**arity``.
+
+        Returns:
+          :class:`HolographicBasisResult` with the transformed values.
+          The ``is_realisable`` field is set to ``None`` for general
+          signatures (a v0.4 deliverable will add the Matchgate-
+          Identity check; for now the realisability question is
+          deferred to the caller).
+        """
+        import numpy as np
+        T = self._validated_T()
+        expected = 2 ** arity
+        if len(values) != expected:
+            raise ValueError(
+                f"{self.name}.transform_signature_general: "
+                f"expected len(values) = 2^arity = {expected}, got {len(values)}"
+            )
+        # Reshape into a length-`arity` tensor with shape (2, 2, ..., 2).
+        # values[alpha] is indexed by integer alpha in [0, 2^arity); we
+        # interpret alpha's bits as the indices along each axis with
+        # axis i corresponding to bit i (LSB-first to match numpy's
+        # reshape convention from a flat row-major buffer).
+        # In numpy reshape((2,)*a) on a flat array, the FIRST axis
+        # varies the slowest, so index alpha at flat position
+        # `alpha_{a-1} ... alpha_1 alpha_0` (big-endian along the axes).
+        # Convention: keep alpha = sum_i (alpha_i * 2^i) (LSB at axis 0)
+        # and let numpy choose the axis ordering; what matters is that
+        # the final flatten() inverse-matches the reshape.
+        tensor = np.asarray(values, dtype=float).reshape((2,) * arity)
+        for axis in range(arity):
+            # Contract T (shape (2, 2), [beta_axis, alpha_axis]) with
+            # the tensor's `axis` (the alpha_axis side).
+            tensor = np.tensordot(T, tensor, axes=([1], [axis]))
+            # tensordot prepends the new axis; move it back to `axis`.
+            tensor = np.moveaxis(tensor, 0, axis)
+        new_values = tensor.reshape(-1).tolist()
+        return HolographicBasisResult(
+            values=new_values,
+            is_realisable=None,
+            recurrence_coefficients=None,
+            basis_matrix=T,
+        )
+
+    # -----------------------------------------------------------------
     # Auto-discovery of T (v0.3 -- the practical fragment of Cai-Lu's SRP)
     # -----------------------------------------------------------------
     #
@@ -533,19 +616,23 @@ class HolographicBasisPair:
 
 @dataclasses.dataclass
 class HolographicBasisResult:
-    """Result of a HolographicBasisPair.transform_signature call.
+    """Result of a HolographicBasisPair.transform_signature[_general] call.
 
     Attributes:
-      values: the transformed signature values [z'_0, ..., z'_n].
-      is_realisable: True iff the transformed signature satisfies the
-        Cai-Lu 2011 order-2 recurrence (matchgate-realisable).
+      values: the transformed signature values. For symmetric inputs
+        this is ``[z'_0, ..., z'_n]`` of length n+1; for general inputs
+        this is a flat length-2^arity array indexed by bitstrings.
+      is_realisable: For SYMMETRIC results: True iff the transformed
+        signature satisfies the Cai-Lu 2011 order-2 recurrence
+        (matchgate-realisable). For GENERAL results: None (the MGI
+        check on a 2^a-dim tensor is a v0.4 deliverable).
       recurrence_coefficients: when realisable, the (a, b, c) kernel
         vector such that a z'_k + b z'_{k+1} + c z'_{k+2} = 0; None
         otherwise.
       basis_matrix: the 2x2 matrix T applied.
     """
     values: List[float]
-    is_realisable: bool
+    is_realisable: Optional[bool]
     recurrence_coefficients: Optional[Any]
     basis_matrix: Any
 
