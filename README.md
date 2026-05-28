@@ -88,6 +88,73 @@ from structural_computing import (
 )
 ```
 
+### Orchestrator (the "give me an answer" top-level engine)
+
+For when you don't want to think about tiers, evaluators, or reductions —
+just hand the framework a problem and a question:
+
+```python
+from structural_computing import Orchestrator
+
+orch = Orchestrator()
+
+# A planar dependency graph -- direct dispatch via T2 free-fermion.
+K4 = {
+    "rotation": {0: [1, 2, 3], 1: [0, 3, 2], 2: [0, 1, 3], 3: [0, 2, 1]},
+    "vertices": [0, 1, 2, 3],
+    "edges": [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)],
+}
+result = orch.evaluate(K4, question="matching_count")
+print(result.answer)                  # -> 3
+print(result.classification.tier)     # -> "T2"
+print(result.leaf_evaluator_used)     # -> "_brute_force_matching_leaf"
+
+# Non-planar K_{3,3}: out-of-family by default, but HybridDecomposition
+# reduces it to a sum of planar sub-problems. Supply the "extras" as hints.
+K33 = {...}                            # see tests/test_orchestrator.py
+result = orch.evaluate(K33, question="matching_count",
+                        hints={"extra_edges": [(0, 3)]})
+print(result.answer)                  # -> 6  (= 3!)
+print(result.reductions_applied)      # -> ["HybridDecomposition(via hints)"]
+print(result.sub_evaluations)         # -> 2  (forced-in branch + forced-out branch)
+```
+
+If the problem is out-of-family AND no registered reduction applies,
+the orchestrator raises `NoKnownReduction` with the classification
+attached so the caller can inspect what was tried.
+
+### Reductions / compositions / recursive decomposition
+
+For users who want to compose their own transformations directly:
+
+```python
+from structural_computing import (
+    HybridDecomposition, ReductionPlan, NormaliseGraphFormat,    # transform.py
+    LinearCombination,                                            # compose.py
+    ShannonExpansion, TreewidthBoundedDP,                         # decompose.py
+)
+```
+
+The reductions / compositions / decompositions layer is the framework's
+**in-family-boundary widener**. v0.1 ships:
+
+- `NormaliseGraphFormat` — coerce edge-list / adjacency-dict / rotation-
+  system inputs into a canonical form.
+- `HybridDecomposition` — branch on a small set of "extra" edges that
+  make a graph non-planar; pay 2^|extras| × O(|V|^3) for the exact
+  matching count.
+- `LinearCombination` — combine two or more in-family signature
+  evaluations as `sum(coeff_i * value_i)`.
+- `ShannonExpansion` — branch on a binary variable; recurse on each
+  branch; base case in-family.
+- `TreewidthBoundedDP` — single-bag tree-decomposition (DP framework
+  in place; multi-bag is the v0.2 deliverable via Bodlaender / Korhonen).
+
+Sketches with detailed v0.2 docstrings (raised as `NotImplementedError`
+today): `CrossingElimination`, `HighDegreeVertexSplit`,
+`RationaliseWeights`, `Projection`, `HolographicBasisPair`, `BranchSum`,
+`PlanarSeparator`, `RecursiveCircuitCut`.
+
 See the full API reference at the worked-examples repo:
 [`docs/reference/`](https://github.com/pcoz/free-fermion-quantum-simulation/tree/main/docs/reference).
 
