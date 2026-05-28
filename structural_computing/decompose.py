@@ -30,7 +30,7 @@ The full set of planned decompositions lives in
 admissibility-geometry/proposals/reductions_compositions_recursive_decomposition.md.
 """
 import dataclasses
-from typing import Any, Callable, List, Optional, Protocol
+from typing import Any, Callable, List, Optional, Protocol, Set
 
 
 # ---------------------------------------------------------------------------
@@ -150,23 +150,102 @@ class ShannonExpansion:
 # ---------------------------------------------------------------------------
 
 class TreewidthBoundedDP:
-    """Treewidth-bounded dynamic programming. A graph with treewidth `w`
-    is solvable exactly by recursing on its tree-decomposition, with
-    each bag of size `w+1` being an in-family Holant problem.
+    r"""Treewidth-bounded dynamic programming for perfect-matching count.
 
-    For workflows / dependency graphs with bounded local connectivity
-    (most real cases), the treewidth is small even when the graph isn't
-    planar. Treewidth-bounded DP gives exact answers in `O(2^w * n)`.
+    A graph G with treewidth `w` is solvable exactly by DP over its
+    tree decomposition, with each "bag" of size at most `w+1` being an
+    in-family local subproblem. Total cost `O(2^O(w) * n)`; for graphs
+    of bounded treewidth (most workflows, real dependency graphs),
+    polynomial-time exact even when the graph isn't planar.
 
-    Status: not implemented in v0.1. The tree-decomposition computation
-    itself is NP-hard in general but has good heuristics; the per-bag
-    Holant evaluation is the framework's existing in-family path.
+    A tree decomposition of G is:
+      * A tree T whose nodes are "bags" -- subsets of V(G).
+      * Every edge (u, v) of G has some bag containing both u and v.
+      * For every vertex v in V(G), the bags containing v form a
+        connected subtree of T.
+    The maximum bag size minus 1 is the WIDTH of the decomposition;
+    the TREEWIDTH of G is the minimum width over all decompositions.
+
+    This concrete implementation handles the case where the user
+    supplies the tree decomposition (computing one optimally is NP-hard
+    in general, but for practical instances good heuristics exist;
+    accepting one as input is the v0.1 contract).
+
+    The decomposition object the caller provides:
+
+        td = {
+            "bags": [{vertex, vertex, ...}, ...],     # list of bag-sets
+            "tree_edges": [(i, j), ...],              # tree structure between bags
+            "root_bag_index": 0,                       # which bag is the DP root
+        }
+
+    Usage:
+
+        decomp = TreewidthBoundedDP(tree_decomposition=td)
+        plan = decomp.decompose({"vertices": V, "edges": E})
+        count = plan.evaluate(leaf_evaluator)        # exact matching count
+
+    Honest scope: this v0.1 release implements the SIMPLEST case --
+    when the tree decomposition has a single bag containing every
+    vertex. In that case the DP collapses to "compute the matching
+    count of the single bag's induced subgraph" -- which we delegate
+    to brute force. This is correct but no faster than brute force.
+    The full multi-bag DP (the v0.2 deliverable) handles arbitrary
+    tree decompositions; the API here is forward-compatible.
+
+    For the multi-bag case (NotImplementedError today), the algorithm
+    is the standard Bodlaender / Korhonen DP for matching counts:
+      - For each bag B, the DP state is which vertices in B are
+        already matched (a 2^|B| state space).
+      - At leaf bags, enumerate states directly.
+      - At internal bags, combine child states by summing over
+        compatible state pairs.
+      - Root gives the total matching count.
     """
     name = "TreewidthBoundedDP"
 
-    def decompose(self, problem):
+    def __init__(self, tree_decomposition: Optional[dict] = None):
+        """Pass a tree decomposition as `tree_decomposition`. If None,
+        the only handled case is "single bag containing all vertices"
+        (we'll synthesise that decomposition on demand)."""
+        self.tree_decomposition = tree_decomposition
+
+    def decompose(self, problem: Any) -> "DecompositionPlan":
+        if not isinstance(problem, dict) or "vertices" not in problem:
+            raise ValueError(
+                f"{self.name}: problem must be a graph dict with 'vertices' "
+                f"and 'edges' fields."
+            )
+        td = self.tree_decomposition
+        if td is None:
+            # Synthesise the trivial single-bag decomposition: one bag
+            # containing all vertices, no tree edges. The DP then
+            # collapses to "compute matchings on the single bag's
+            # induced subgraph" = the whole graph.
+            td = {
+                "bags": [set(problem["vertices"])],
+                "tree_edges": [],
+                "root_bag_index": 0,
+            }
+        n_bags = len(td["bags"])
+        if n_bags == 0:
+            raise ValueError(f"{self.name}: tree decomposition has no bags")
+        if n_bags == 1:
+            # The trivial single-bag case: one leaf, whose evaluation IS
+            # the matching count of the bag's induced subgraph.
+            bag = td["bags"][0]
+            induced_vertices = [v for v in problem["vertices"] if v in bag]
+            induced_edges = [(u, v) for (u, v) in problem["edges"]
+                              if u in bag and v in bag]
+            leaf = DecompositionPlan(
+                problem={"vertices": induced_vertices, "edges": induced_edges},
+                label="root-bag (single-bag decomposition)",
+            )
+            return leaf
         raise NotImplementedError(
-            f"{self.name} is on the v0.2 roadmap."
+            f"{self.name}: multi-bag tree decomposition is on the v0.2 roadmap. "
+            f"The standard Bodlaender / Korhonen matching-count DP applies; "
+            f"see admissibility-geometry/proposals/reductions_compositions_recursive_decomposition.md"
         )
 
 

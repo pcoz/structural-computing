@@ -94,7 +94,69 @@ What this release **is not**:
   via
   [`ORIENTATION.md`](https://github.com/pcoz/admissibility-geometry/blob/main/ORIENTATION.md).
 
-## [Unreleased] — v0.1.0a3 follow-up
+## [Unreleased] — v0.1.0a4 follow-up
+
+Continuing through the four-reductions + orchestrator priority list:
+
+- **`HybridDecomposition` fully implemented** in `transform.py` (was
+  `NotImplementedError`). Implements the standard Tutte / Lovasz-Plummer
+  decomposition `M(G) = M(G - e) + M(G / uv)` for perfect-matching
+  counts. For a non-planar graph that becomes planar after removing a
+  small set of extra edges, gives exact matching count in
+  `2^|extras| * O(|V|^3)`.
+  - New method `sc.count_matchings_hybrid(graph, extra_edges)` on
+    `StructuralComputer` wires it to the leaf evaluator.
+  - `tests/test_transform.py` (16 tests): verifies on K_{3,3}
+    (non-planar, 6 matchings) via 1 / 2 / 3 extra edges; K_4
+    with no extras; direct apply() inspection; invalid forced-in
+    subsets skipped; bad inputs raise correctly.
+
+- **`TreewidthBoundedDP` partial implementation** in `decompose.py`.
+  The trivial single-bag case is fully implemented (== brute force on
+  the whole graph). The multi-bag case raises a clear
+  `NotImplementedError` with a pointer to the v0.2 deliverable
+  (standard Bodlaender / Korhonen matching-count DP). The API
+  accepts a tree-decomposition spec (`{"bags": [...], "tree_edges":
+  [...], "root_bag_index": ...}`) so callers can wire in their own
+  tree-decomposition algorithms.
+
+- **`Orchestrator` shipped** as a new module `orchestrator.py`. The
+  top-level "give me an exact answer" engine. Wires together:
+  classifier + router + per-(tier, question) leaf evaluator
+  registry + the reductions/compositions/decompositions layer.
+
+  API:
+    `orch = Orchestrator()`
+    `result = orch.evaluate(problem, question="matching_count", hints=...)`
+    `result.answer, result.classification, result.reductions_applied`,
+    `result.sub_evaluations, result.leaf_evaluator_used`
+
+  Default registry covers `(T2, matching_count)` and `(T4,
+  matching_count)` via brute-force. Pluggable: users can `register_leaf_evaluator(tier, question, callable)`
+  or `register_reduction(reduction)`. Out-of-family + no known
+  reduction -> `NoKnownReduction` honest stop.
+
+  Hint-driven path: `evaluate(..., hints={"extra_edges": [...]})`
+  applies `HybridDecomposition` automatically for matching-count
+  questions on graphs that classify out-of-family.
+
+  v0.1 search is linear (try each registered reduction once). v0.2
+  will add backtracking + cost-driven search over auto-applicable
+  reductions.
+
+- **Public API now 52 symbols** (added Orchestrator, OrchestratorResult,
+  NoKnownReduction, LeafEvaluator, DEFAULT_LEAF_REGISTRY).
+
+- **`tests/test_orchestrator.py` (9 tests)** covering direct dispatch
+  on T2/T4, HybridDecomposition via hints, honest stops on unsupported
+  questions, custom-leaf registration, format-normalisation.
+
+- **`CrossingElimination` and `HolographicBasisPair`** remain
+  `NotImplementedError` with v0.2 docstrings. These need the specific
+  matching-preserving gadget construction (Cai-Lu-Xia 2009) and the
+  Valiant 2004 basis-change machinery respectively; v0.2 deliverables.
+
+## [0.1.0a3] — 2026-05-28 (same session)
 
 Shipped after v0.1.0a2 in the same session:
 

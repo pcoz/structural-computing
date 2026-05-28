@@ -77,6 +77,16 @@ from .decompose import (
     PlanarSeparator,
     RecursiveCircuitCut,
 )
+# Orchestrator -- the top-level "give me an exact answer" engine that
+# ties the classifier + leaf evaluators + reductions/compositions/
+# decompositions into a single evaluate(problem, question) interface.
+from .orchestrator import (
+    Orchestrator,
+    OrchestratorResult,
+    NoKnownReduction,
+    LeafEvaluator,
+    DEFAULT_LEAF_REGISTRY,
+)
 
 __all__ = [
     # Wrapper class (the main entry point)
@@ -135,6 +145,12 @@ __all__ = [
     "TreewidthBoundedDP",
     "PlanarSeparator",
     "RecursiveCircuitCut",
+    # Orchestrator -- the top-level dispatcher
+    "Orchestrator",
+    "OrchestratorResult",
+    "NoKnownReduction",
+    "LeafEvaluator",
+    "DEFAULT_LEAF_REGISTRY",
     # Version
     "__version__",
 ]
