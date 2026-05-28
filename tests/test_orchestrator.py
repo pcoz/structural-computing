@@ -166,6 +166,51 @@ def test_orchestrator_unknown_problem_type():
         orch.evaluate({"unknown_kind": "weirdness"}, question="anything")
 
 
+def test_orchestrator_rationalise_weighted_matching_sum():
+    """A weighted graph with float weights, asked for weighted_matching_sum,
+    is auto-rationalised when `hints['rationalise_precision']` is supplied.
+    The orchestrator scales the weights to integers, computes the integer
+    matching sum, and divides back by 10^(precision * matching_size) so the
+    final answer matches the true real-valued sum."""
+    orch = Orchestrator()
+    graph = {
+        "rotation": {0: [1, 3], 1: [0, 2], 2: [1, 3], 3: [0, 2]},
+        "vertices": [0, 1, 2, 3],
+        "edges": [(0, 1), (1, 2), (2, 3), (3, 0)],
+        # Two perfect matchings:
+        #   (0,1) * (2,3) = 0.7 * 0.5 = 0.35
+        #   (1,2) * (3,0) = 0.3 * 0.9 = 0.27
+        # Total = 0.62
+        "weights": {(0, 1): 0.7, (1, 2): 0.3, (2, 3): 0.5, (3, 0): 0.9},
+    }
+    r = orch.evaluate(graph, question="weighted_matching_sum",
+                       hints={"rationalise_precision": 6})
+    assert abs(r.answer - 0.62) < 1e-9
+    # The rationalise phase fired with outcome ok.
+    phases_and_outcomes = [(s.phase, s.outcome) for s in r.workflow_trace]
+    assert ("rationalise", "ok") in phases_and_outcomes
+    # And RationaliseWeights is in the reductions_applied list.
+    assert "RationaliseWeights" in r.reductions_applied
+
+
+def test_orchestrator_skips_rationalise_when_weights_already_integer():
+    """If weights are already integer, the rationalise phase is skipped
+    even when the hint is supplied."""
+    orch = Orchestrator()
+    graph = {
+        "rotation": {0: [1, 3], 1: [0, 2], 2: [1, 3], 3: [0, 2]},
+        "vertices": [0, 1, 2, 3],
+        "edges": [(0, 1), (1, 2), (2, 3), (3, 0)],
+        "weights": {(0, 1): 2, (1, 2): 3, (2, 3): 5, (3, 0): 7},
+    }
+    r = orch.evaluate(graph, question="weighted_matching_sum",
+                       hints={"rationalise_precision": 6})
+    # Matching 1: 2*5 = 10. Matching 2: 3*7 = 21. Total = 31.
+    assert r.answer == 31
+    phases_and_outcomes = [(s.phase, s.outcome) for s in r.workflow_trace]
+    assert ("rationalise", "skipped") in phases_and_outcomes
+
+
 def test_orchestrator_treewidth_dp_hint():
     """When a tree_decomposition hint is supplied and direct dispatch is
     NOT available for the (tier, question), the orchestrator falls back
