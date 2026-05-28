@@ -121,3 +121,47 @@ def test_route_preserves_meters():
     cls = _cls("T0", n_variables=10, custom_field="hello")
     r = route(cls)
     assert "custom_field" in r.meters
+
+
+# ---------------------------------------------------------------------------
+# Calibration wiring (v0.3)
+# ---------------------------------------------------------------------------
+
+def test_route_without_question_marks_heuristic():
+    """Calling route() with no question argument always tags the cost
+    source as 'heuristic' and omits predicted_seconds."""
+    from structural_computing import clear_calibration
+    clear_calibration()
+    r = route(_cls("T2", n_vertices=8))
+    assert r.meters.get("cost_source") == "heuristic"
+    assert "predicted_seconds" not in r.meters
+
+
+def test_route_with_question_and_no_calibration_still_heuristic():
+    """An empty calibration registry means even a supplied question
+    returns heuristic-only meters."""
+    from structural_computing import clear_calibration
+    clear_calibration()
+    r = route(_cls("T2", n_vertices=8), question="matching_count")
+    assert r.meters.get("cost_source") == "heuristic"
+
+
+def test_route_with_calibration_adds_predicted_seconds():
+    """When calibration is loaded for (tier, question), route() surfaces
+    predicted_seconds and tags cost_source='calibrated'."""
+    from structural_computing import apply_calibration, clear_calibration
+    clear_calibration()
+    apply_calibration({
+        ("T2", "matching_count"): {
+            "model": "power_law", "params": (1e-7, 3.0), "rms": 0.05,
+        },
+    })
+    try:
+        r = route(_cls("T2", n_vertices=10), question="matching_count")
+        assert r.meters["cost_source"] == "calibrated"
+        # Power law: 1e-7 * 10^3 = 1e-4 seconds (problem size = 10 for T2)
+        assert abs(r.meters["predicted_seconds"] - 1e-4) < 1e-9
+        # cost field is still log2(ops) heuristic for backward compat.
+        assert math.isfinite(r.cost)
+    finally:
+        clear_calibration()

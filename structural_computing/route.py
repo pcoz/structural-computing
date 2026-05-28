@@ -23,8 +23,9 @@ The map at a glance:
     T7     ADVISED                           out of family, external solver
 """
 import math
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
+from .calibration import has_calibration_for, predict_seconds
 from .classify import Classification
 from .pipeline_router import Route
 
@@ -94,12 +95,63 @@ def _poly(n: int) -> float:
     return 2.0 * math.log2(max(n, 2))
 
 
-def route(classification: Classification) -> Route:
+def _size_hint_for(tier: str, m: Dict[str, Any]) -> int:
+    """Pick the natural "problem size" for this tier from the meters --
+    used to query the calibration's predict_seconds(). The choices
+    match the per-tier dispatch logic below: T0/T1 use n_variables,
+    T2/T4 use n_vertices, T3 uses arity."""
+    if tier in ("T0", "T1"):
+        nl = int(m.get("n_linear", m.get("n_variables", 1)))
+        nq = int(m.get("n_quadratic", 0))
+        return max(nl + nq, 1)
+    if tier in ("T2", "T4", "T6"):
+        return int(m.get("n_vertices", m.get("arity", 2)))
+    if tier == "T3":
+        return int(m.get("arity", 3))
+    return int(m.get("n_vertices", 1))
+
+
+def _maybe_calibrated(tier: str, question: Optional[str],
+                       m: Dict[str, Any]) -> Optional[float]:
+    """If a calibration entry exists for ``(tier, question)``, return the
+    predicted seconds for a problem of the natural size. Else return
+    None. The ``question`` argument is what makes calibration lookup
+    possible; without it we don't know which leaf evaluator will run."""
+    if question is None or not has_calibration_for(tier, question):
+        return None
+    n = _size_hint_for(tier, m)
+    return predict_seconds(tier, question, n=n)
+
+
+def route(classification: Classification,
+           question: Optional[str] = None) -> Route:
     """Map a `Classification` to a `Route`. Cost is reported in log2(ops)
     units (so a value of 8.6 means ~2^8.6 = ~388 operations). Advised tiers
-    return cost = +inf with the reason in the meters."""
+    return cost = +inf with the reason in the meters.
+
+    Optional ``question`` argument: when supplied AND a calibration
+    entry has been loaded (via
+    :func:`structural_computing.apply_calibration`) for the
+    ``(tier, question)`` pair, the returned Route's meters also carry
+    ``predicted_seconds`` (a wall-clock estimate on the calibrated
+    machine) plus ``cost_source = "calibrated"``. The ``cost`` field
+    itself stays in log2(ops) for backward-compatibility; the
+    calibrated number is informational, surfaced in workflow traces
+    and available to callers via ``route.meters["predicted_seconds"]``.
+
+    When ``question`` is omitted OR no calibration is loaded, the
+    meters carry ``cost_source = "heuristic"`` and ``predicted_seconds``
+    is absent.
+    """
     tier = classification.tier
     m: Dict[str, Any] = dict(classification.meters)
+    cal_seconds = _maybe_calibrated(tier, question, m)
+    cost_meta = (
+        {"cost_source": "calibrated", "predicted_seconds": cal_seconds,
+         "calibration_question": question}
+        if cal_seconds is not None
+        else {"cost_source": "heuristic"}
+    )
 
     if tier == "T0":
         nv = int(m.get("n_variables", 1))
@@ -110,7 +162,8 @@ def route(classification: Classification) -> Route:
             member="ch-form",
             cost=_poly_cost(nv + 1, degree=_POLY_DEGREE_T0_T1, overhead=_OVERHEAD_T0),
             meters={**m, "model": "affine-quadratic support directions",
-                    "cost_model": "3*log2(n) + 0.5 (CH-form, Gauss-elim)"},
+                    "cost_model": "3*log2(n) + 0.5 (CH-form, Gauss-elim)",
+                    **cost_meta},
             tier=tier,
         )
 
@@ -123,7 +176,8 @@ def route(classification: Classification) -> Route:
             member="ch-form",
             cost=_poly_cost(nl + nq + 1, degree=_POLY_DEGREE_T0_T1, overhead=_OVERHEAD_T1),
             meters={**m, "model": "affine-quadratic with post-selecting Z measurements",
-                    "cost_model": "3*log2(n) + 1.0 (CH-form + post-selection)"},
+                    "cost_model": "3*log2(n) + 1.0 (CH-form + post-selection)",
+                    **cost_meta},
             tier=tier,
         )
 
@@ -137,7 +191,8 @@ def route(classification: Classification) -> Route:
             member="free-fermion",
             cost=_poly_cost(2 * nv, degree=_POLY_DEGREE_T2_T3_T4, overhead=_OVERHEAD_T2),
             meters={**m, "model": "FKT planar Pfaffian",
-                    "cost_model": "3*log2(2|V|) + 1.5 (Pfaffian)"},
+                    "cost_model": "3*log2(2|V|) + 1.5 (Pfaffian)",
+                    **cost_meta},
             tier=tier,
         )
 
@@ -152,7 +207,8 @@ def route(classification: Classification) -> Route:
                 cost=(_poly_cost(2 * ar, degree=_POLY_DEGREE_T2_T3_T4, overhead=_OVERHEAD_T3)
                        + math.log2(max(1, rank))),
                 meters={**m, "model": f"FKT + basis-aware rank-{rank} parity-split decomposition",
-                        "cost_model": f"3*log2(2*arity) + 1.5 + log2({rank}) (parity-split)"},
+                        "cost_model": f"3*log2(2*arity) + 1.5 + log2({rank}) (parity-split)",
+                        **cost_meta},
                 tier=tier,
             )
         return Route(
@@ -173,7 +229,8 @@ def route(classification: Classification) -> Route:
             cost=(g * _GENUS_FACTOR
                    + _poly_cost(2 * nv, degree=_POLY_DEGREE_T2_T3_T4, overhead=_OVERHEAD_T4)),
             meters={**m, "model": f"genus-{g} Kasteleyn (Klein arc, 4^g scaling)",
-                    "cost_model": f"{g}*log2(4) + 3*log2(2|V|) + 1.5 (genus-{g} Kasteleyn)"},
+                    "cost_model": f"{g}*log2(4) + 3*log2(2|V|) + 1.5 (genus-{g} Kasteleyn)",
+                    **cost_meta},
             tier=tier,
         )
 
