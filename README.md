@@ -158,10 +158,31 @@ today): `CrossingElimination`, `HighDegreeVertexSplit`,
 See the full API reference at the worked-examples repo:
 [`docs/reference/`](https://github.com/pcoz/free-fermion-quantum-simulation/tree/main/docs/reference).
 
+## Runnable examples
+
+The [`examples/`](examples/) folder contains six self-contained scripts
+runnable after `pip install`:
+
+| | |
+|---|---|
+| `01_count_matchings.py`         | exact perfect-matching count |
+| `02_rare_tail_probability.py`   | exact rare-tail probability |
+| `03_compare_configurations.py`  | sub-MC-noise-floor comparison |
+| `04_orchestrator_dispatch.py`   | the Orchestrator's direct-dispatch + honest-stop |
+| `05_hybrid_decomposition.py`    | exact matching count on non-planar K_{3,3} |
+| `06_signature_classification.py`| basis-aware rank ≤ 2 across 11 classical symmetric signatures |
+
+Each example produces a bit-identically reproducible number. See
+[`examples/README.md`](examples/README.md) for the index.
+
 ## Documentation
 
 The detailed documentation lives in the companion worked-examples repo
-[`free-fermion-quantum-simulation`](https://github.com/pcoz/free-fermion-quantum-simulation):
+[`free-fermion-quantum-simulation`](https://github.com/pcoz/free-fermion-quantum-simulation)
+— the **development-trail** form of the framework, where the original
+worked examples and brute-force verification live. This package is the
+**simplified PyPI form**; together they form the full picture (origin
++ polished form):
 
 - **Tutorial:** [`docs/getting-started.md`](https://github.com/pcoz/free-fermion-quantum-simulation/blob/main/docs/getting-started.md) — 10-minute walkthrough.
 - **Originality:** [`docs/originality.md`](https://github.com/pcoz/free-fermion-quantum-simulation/blob/main/docs/originality.md) — what's genuinely new here (dart-chain corrected primitive, basis-aware rank ≤ 2, diagnostic-layer triad).
