@@ -321,10 +321,23 @@ class NormaliseGraphFormat:
     name = "NormaliseGraphFormat"
 
     def applies_to(self, problem: Any) -> bool:
-        # Applies to any of the three accepted graph formats.
+        # Applies to any of the three accepted graph formats. Crucially,
+        # does NOT match constraint-set dicts (key 'A') or signature dicts
+        # (key 'values') or anything with a 'kind' field that's not 'graph'.
         if isinstance(problem, list) and problem and isinstance(problem[0], tuple):
             return True
         if isinstance(problem, dict) and problem:
+            # Disambiguate dicts: skip if it's a non-graph typed dict.
+            if any(k in problem for k in ("A", "values")):
+                return False
+            kind = problem.get("kind")
+            if kind is not None and kind != "graph":
+                return False
+            # Skip if it's already a normalised graph dict (vertices + edges).
+            if "vertices" in problem and "edges" in problem:
+                return False
+            # The remaining dicts are interpreted as rotation system or
+            # adjacency dict; both have list / set values.
             sample_value = next(iter(problem.values()))
             return isinstance(sample_value, (set, frozenset, list))
         return False

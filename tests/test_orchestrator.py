@@ -58,8 +58,13 @@ def test_result_carries_provenance():
     orch = Orchestrator()
     r = orch.evaluate(K4_TETRAHEDRON, question="matching_count")
     assert isinstance(r, OrchestratorResult)
-    assert r.leaf_evaluator_used == "_brute_force_matching_leaf"
+    assert r.leaf_evaluator_used == "_matching_count_leaf"
     assert r.classification.tier == "T2"
+    # And the workflow_trace records every step.
+    assert len(r.workflow_trace) >= 2          # at least classify + dispatch
+    phases = [s.phase for s in r.workflow_trace]
+    assert "classify" in phases
+    assert "direct-dispatch" in phases
 
 
 # ---------------------------------------------------------------------------
@@ -132,10 +137,30 @@ def test_register_custom_leaf_evaluator():
 # Format normalisation
 # ---------------------------------------------------------------------------
 
-def test_orchestrator_handles_constraint_set_dispatch_error():
-    """Constraint sets / signatures aren't yet routed through the
-    orchestrator; the wrapper handles those directly. Make sure the
-    error is clean."""
+def test_orchestrator_handles_constraint_set():
+    """The orchestrator routes constraint sets through the right classifier
+    and leaf evaluator (added in v0.2)."""
+    import numpy as np
+    constraints = {"A": np.array([[1, 1, 0], [0, 1, 1]], dtype=int),
+                    "b": np.array([1, 0], dtype=int)}
     orch = Orchestrator()
-    with pytest.raises(NotImplementedError):
-        orch.evaluate({"constraints": "something"}, question="count_solutions")
+    r = orch.evaluate(constraints, question="count_solutions")
+    assert r.answer == 2
+    assert r.classification.tier == "T0"
+
+
+def test_orchestrator_handles_signature():
+    """The orchestrator routes signatures through classify_signature and
+    the matchgate_rank leaf evaluator."""
+    orch = Orchestrator()
+    r = orch.evaluate({"values": [0, 1, 1]}, question="matchgate_rank")
+    assert r.answer in (0, 1, 2)        # basis-aware rank invariant
+    assert r.classification.tier == "T2"
+
+
+def test_orchestrator_unknown_problem_type():
+    """A problem object that doesn't match any known dispatch raises
+    NoKnownReduction (not NotImplementedError)."""
+    orch = Orchestrator()
+    with pytest.raises(NoKnownReduction):
+        orch.evaluate({"unknown_kind": "weirdness"}, question="anything")

@@ -41,7 +41,14 @@ reduction once and returns the first successful in-family transformation.
 import dataclasses
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from .classify import Classification, classify_graph
+import numpy as np
+
+from .classify import (
+    Classification,
+    classify_graph,
+    classify_constraint_set,
+    classify_signature,
+)
 from .route import route as route_classification
 from .transform import (
     Reduction,
@@ -52,7 +59,45 @@ from .transform import (
 )
 from .compose import Composition, CompositionPlan, LinearCombination
 from .decompose import Decomposition, DecompositionPlan, ShannonExpansion
-from .verifier import brute_force_count_matchings
+from .verifier import (
+    brute_force_count_matchings,
+    enumerate_satisfying_assignments,
+    satisfies_gf2_affine,
+)
+
+
+# ===========================================================================
+# IMPORTANT: keeping the Orchestrator up to date
+# ===========================================================================
+#
+# The Orchestrator is the framework's TOP-LEVEL DISPATCHER. Every new
+# capability added to the package must be exposed through the Orchestrator
+# as well, otherwise the user of `Orchestrator.evaluate()` won't be able
+# to reach it.
+#
+# The places that have to be kept in lock-step with the rest of the
+# package:
+#
+#   1. **Classifier dispatcher** -- `_classify_problem` below. If a new
+#      problem type is added (a new `classify_*` function in classify.py),
+#      add a branch here.
+#
+#   2. **DEFAULT_LEAF_REGISTRY** -- the (tier, question) -> evaluator map
+#      below. Every new (tier, question) pair the framework can answer
+#      needs an entry. Wrapper methods on StructuralComputer are
+#      effectively shorthand for `Orchestrator.evaluate(problem,
+#      question=<the method name>)` -- so every wrapper method should be
+#      reachable via a leaf evaluator.
+#
+#   3. **The Orchestrator's `_default_reductions` list** -- every
+#      currently-runnable reduction that can apply auto-detectably should
+#      be in this list, so the Phase-6 search reaches it.
+#
+# If you add new functionality and DON'T touch this file, the orchestrator
+# will silently NOT reach the new functionality and the user will get
+# `NoKnownReduction` even though the framework CAN do it. So: touch this
+# file every time.
+# ===========================================================================
 
 
 # ---------------------------------------------------------------------------
@@ -125,32 +170,226 @@ class OrchestratorResult:
 # handles a specific (tier, question) combination at the in-family level.
 # The registry maps (tier, question) -> callable.
 #
-# v0.1 default registry covers:
-#   (T2, "matching_count")  -- planar matching count via brute force at small n
-#   (T4, "matching_count")  -- bounded-genus matching count via brute force
+# v0.2 default registry covers:
 #
-# v0.2 deliverable: register the full set of (tier, question) combinations
-# including the planar / genus-g Pfaffian leaf evaluators for asymptotic
-# poly-time on the in-family path.
+#   Graphs (T2/T4):
+#     matching_count, witness, single_points_of_failure,
+#     tail_probability
+#
+#   Constraint sets (T0/T1):
+#     count_solutions, find_witness, list_solutions
+#
+#   Signatures (T2/T3):
+#     matchgate_rank, is_matchgate_realisable, classify_function
+#
+# To add a new (tier, question), write a small leaf-evaluator function
+# below and register it. To add a question for a new tier, same -- just
+# add an entry.
 
 LeafEvaluator = Callable[[Any, str], Any]
 
 
-def _brute_force_matching_leaf(problem: Any, question: str) -> int:
-    """Default leaf evaluator for the matching_count question on graphs.
-    Uses brute force; v0.2 will substitute the planar Pfaffian here."""
-    if question != "matching_count":
-        raise ValueError(f"_brute_force_matching_leaf can't answer '{question}'")
+# ---------- Graph leaf evaluators ------------------------------------------
+
+def _matching_count_leaf(problem: Any, question: str) -> int:
+    """matching_count on a graph (T2 or T4): brute force at small n."""
     if isinstance(problem, dict) and "vertices" in problem:
         return brute_force_count_matchings(problem["vertices"], problem["edges"])
-    # Edge-list or rotation-system inputs need normalisation first; the
-    # caller is expected to have normalised.
-    raise ValueError(f"matching leaf expects a graph dict; got {type(problem).__name__}")
+    raise ValueError(f"matching_count_leaf expects a graph dict; got {type(problem).__name__}")
 
+
+def _witness_leaf(problem: Any, question: str) -> List[Tuple[Any, Any]]:
+    """witness on a graph (T2 or T4): one perfect matching via min-weight."""
+    import math
+    import holant_tools
+    if not isinstance(problem, dict) or "vertices" not in problem:
+        raise ValueError(f"witness_leaf expects a graph dict")
+    vertices = problem["vertices"]
+    edges = problem["edges"]
+    n = len(vertices)
+    idx = {v: i for i, v in enumerate(vertices)}
+    W = [[math.inf] * n for _ in range(n)]
+    for (u, w) in edges:
+        i, j = idx[u], idx[w]
+        W[i][j] = W[j][i] = 1.0
+    _, matching = holant_tools.min_weight_perfect_matching(W)
+    if matching is None:
+        return []
+    return [(vertices[i], vertices[j]) for (i, j) in matching]
+
+
+def _spofs_leaf(problem: Any, question: str) -> List[Tuple[Any, Any]]:
+    """single_points_of_failure on a graph: edges whose removal drops
+    the matching count to 0."""
+    if not isinstance(problem, dict) or "vertices" not in problem:
+        raise ValueError(f"spofs_leaf expects a graph dict")
+    vertices = problem["vertices"]
+    edges = problem["edges"]
+    spofs = []
+    for e in edges:
+        sub = [x for x in edges if x != e]
+        if brute_force_count_matchings(vertices, sub) == 0:
+            spofs.append(e)
+    return spofs
+
+
+def _tail_probability_leaf(problem: Any, question: str) -> float:
+    """tail_probability on a graph: exact P(no perfect matching survives)
+    under independent edge failure. Caller passes `p_fail` via problem
+    metadata. Brute-force 2^|E| enumeration; capped at |E| <= 24."""
+    if not isinstance(problem, dict) or "vertices" not in problem:
+        raise ValueError(f"tail_probability_leaf expects a graph dict")
+    p_fail = problem.get("p_fail")
+    if p_fail is None:
+        raise ValueError("tail_probability requires 'p_fail' in the problem dict")
+    vertices = problem["vertices"]
+    edges = problem["edges"]
+    n_edges = len(edges)
+    if n_edges > 24:
+        raise ValueError(f"tail_probability_leaf: |E|={n_edges} > 24 (cap)")
+    total = 0.0
+    for mask in range(2 ** n_edges):
+        surviving = [edges[i] for i in range(n_edges) if (mask >> i) & 1]
+        k_failed = n_edges - len(surviving)
+        weight = (p_fail ** k_failed) * ((1 - p_fail) ** (n_edges - k_failed))
+        if brute_force_count_matchings(vertices, surviving) == 0:
+            total += weight
+    return total
+
+
+# ---------- Constraint-set leaf evaluators ---------------------------------
+
+def _count_solutions_leaf(problem: Any, question: str) -> int:
+    """count_solutions on a constraint set (T0/T1): exact count of x with
+    A x = b (mod 2) and optionally quadratic constraints."""
+    from .easy import _gf2_rank
+    if not isinstance(problem, dict) or "A" not in problem:
+        raise ValueError("count_solutions_leaf expects {A, b, Q?, c?}")
+    A = np.asarray(problem["A"], dtype=int)
+    b = np.asarray(problem.get("b", np.zeros(A.shape[0], dtype=int)), dtype=int)
+    Q = problem.get("Q") or []
+    c = problem.get("c")
+    n = A.shape[1] if A.size else 0
+    if n == 0:
+        return 1 if not Q else 0
+    if not Q:
+        # T0: count = 2^(n - rank(A)) if consistent, else 0.
+        rank = _gf2_rank(A)
+        Aug = np.hstack([A, b.reshape(-1, 1)])
+        if _gf2_rank(Aug) != rank:
+            return 0
+        return 2 ** (n - rank)
+    # T1: brute force at small n
+    if n > 24:
+        raise ValueError(f"count_solutions_leaf T1: n={n} > 24 (cap)")
+    Q_list = [np.asarray(Qi, dtype=int) for Qi in Q]
+    c_arr = np.asarray(c if c is not None else [0] * len(Q_list), dtype=int)
+    count = 0
+    for x in range(2 ** n):
+        bits = np.array([(x >> (n - 1 - i)) & 1 for i in range(n)], dtype=int)
+        if not np.array_equal((A @ bits) % 2, b % 2):
+            continue
+        if all((bits @ Qi @ bits) % 2 == ci % 2 for Qi, ci in zip(Q_list, c_arr)):
+            count += 1
+    return count
+
+
+def _find_witness_constraint_leaf(problem: Any, question: str) -> Optional[int]:
+    """find_witness on a constraint set: one satisfying assignment as int,
+    or None if infeasible. T0 uses Gauss-Jordan; T1 uses brute force."""
+    from .easy import _gf2_solve_one, _bits_to_int
+    A = np.asarray(problem["A"], dtype=int)
+    b = np.asarray(problem.get("b", np.zeros(A.shape[0], dtype=int)), dtype=int)
+    Q = problem.get("Q") or []
+    if not Q:
+        x = _gf2_solve_one(A, b)
+        return _bits_to_int(x) if x is not None else None
+    n = A.shape[1]
+    if n > 24:
+        raise ValueError(f"find_witness_constraint_leaf T1: n={n} > 24")
+    Q_list = [np.asarray(Qi, dtype=int) for Qi in Q]
+    c_arr = np.asarray(problem.get("c", [0] * len(Q_list)), dtype=int)
+    for x in range(2 ** n):
+        bits = np.array([(x >> (n - 1 - i)) & 1 for i in range(n)], dtype=int)
+        if not np.array_equal((A @ bits) % 2, b % 2):
+            continue
+        if all((bits @ Qi @ bits) % 2 == ci % 2 for Qi, ci in zip(Q_list, c_arr)):
+            return x
+    return None
+
+
+def _list_solutions_leaf(problem: Any, question: str) -> List[int]:
+    """list_solutions on a constraint set: brute-force enumeration of all
+    satisfying assignments. Capped at n <= 20."""
+    A = np.asarray(problem["A"], dtype=int)
+    b = np.asarray(problem.get("b", np.zeros(A.shape[0], dtype=int)), dtype=int)
+    Q_raw = problem.get("Q") or []
+    n = A.shape[1]
+    if n > 20:
+        raise ValueError(f"list_solutions_leaf: n={n} > 20 (cap)")
+    if not Q_raw:
+        return enumerate_satisfying_assignments(A, b)
+    Q_list = [np.asarray(Qi, dtype=int) for Qi in Q_raw]
+    c_arr = np.asarray(problem.get("c", [0] * len(Q_list)), dtype=int)
+    out = []
+    for x in range(2 ** n):
+        bits = np.array([(x >> (n - 1 - i)) & 1 for i in range(n)], dtype=int)
+        if not np.array_equal((A @ bits) % 2, b % 2):
+            continue
+        if all((bits @ Qi @ bits) % 2 == ci % 2 for Qi, ci in zip(Q_list, c_arr)):
+            out.append(x)
+    return out
+
+
+# ---------- Signature leaf evaluators --------------------------------------
+
+def _matchgate_rank_leaf(problem: Any, question: str) -> int:
+    """matchgate_rank on a symmetric signature (T2 or T3): read the
+    basis-aware rank from the Classification meters. The publicly-
+    original result is that this is always in {0, 1, 2} for symmetric
+    signatures."""
+    if not isinstance(problem, dict) or "values" not in problem:
+        raise ValueError("matchgate_rank_leaf expects {values: [v_0, ..., v_n]}")
+    cls = classify_signature(problem["values"])
+    return int(cls.meters.get("basis_aware_rank", -1))
+
+
+def _is_matchgate_realisable_leaf(problem: Any, question: str) -> bool:
+    return _matchgate_rank_leaf(problem, "matchgate_rank") >= 1
+
+
+def _classify_function_leaf(problem: Any, question: str) -> Classification:
+    if not isinstance(problem, dict) or "values" not in problem:
+        raise ValueError("classify_function_leaf expects {values: ...}")
+    return classify_signature(problem["values"])
+
+
+# ---------- The default registry (covers everything reachable in v0.2) -----
 
 DEFAULT_LEAF_REGISTRY: Dict[Tuple[str, str], LeafEvaluator] = {
-    ("T2", "matching_count"): _brute_force_matching_leaf,
-    ("T4", "matching_count"): _brute_force_matching_leaf,
+    # Graph questions
+    ("T2", "matching_count"):            _matching_count_leaf,
+    ("T4", "matching_count"):            _matching_count_leaf,
+    ("T2", "witness"):                   _witness_leaf,
+    ("T4", "witness"):                   _witness_leaf,
+    ("T2", "single_points_of_failure"):  _spofs_leaf,
+    ("T4", "single_points_of_failure"):  _spofs_leaf,
+    ("T2", "tail_probability"):          _tail_probability_leaf,
+    ("T4", "tail_probability"):          _tail_probability_leaf,
+    # Constraint-set questions
+    ("T0", "count_solutions"):           _count_solutions_leaf,
+    ("T1", "count_solutions"):           _count_solutions_leaf,
+    ("T0", "find_witness"):              _find_witness_constraint_leaf,
+    ("T1", "find_witness"):              _find_witness_constraint_leaf,
+    ("T0", "list_solutions"):            _list_solutions_leaf,
+    ("T1", "list_solutions"):            _list_solutions_leaf,
+    # Signature questions
+    ("T2", "matchgate_rank"):            _matchgate_rank_leaf,
+    ("T3", "matchgate_rank"):            _matchgate_rank_leaf,
+    ("T2", "is_matchgate_realisable"):   _is_matchgate_realisable_leaf,
+    ("T3", "is_matchgate_realisable"):   _is_matchgate_realisable_leaf,
+    ("T2", "classify_function"):         _classify_function_leaf,
+    ("T3", "classify_function"):         _classify_function_leaf,
 }
 
 
@@ -277,25 +516,24 @@ class Orchestrator:
             ))
 
         # ----- Phase 2: Classify --------------------------------------
-        if isinstance(problem, dict) and "rotation" in problem:
-            cls = classify_graph(problem["rotation"])
+        cls, classifier_name = self._classify_problem(problem)
+        if cls is None:
             workflow_trace.append(WorkflowStep(
-                phase="classify", action="classify_graph",
-                outcome="ok",
-                detail=f"tier={cls.tier}, in_family={cls.in_family}, "
-                        f"reasoning='{cls.reasoning}'",
-            ))
-        else:
-            workflow_trace.append(WorkflowStep(
-                phase="classify", action="classify_graph",
+                phase="classify", action="auto-dispatch",
                 outcome="failed",
-                detail="problem is not a graph dict with a rotation system",
+                detail=f"could not infer classifier for problem type {type(problem).__name__}",
             ))
-            raise NotImplementedError(
-                "Orchestrator currently handles graph problems only; "
-                "use StructuralComputer.count_solutions / .matchgate_rank "
-                "for constraint sets and signatures."
+            raise NoKnownReduction(
+                Classification(tier="T7", meters={"problem_type": type(problem).__name__},
+                                in_family=False, reasoning="unknown problem type"),
+                reductions_applied,
             )
+        workflow_trace.append(WorkflowStep(
+            phase="classify", action=classifier_name,
+            outcome="ok",
+            detail=f"tier={cls.tier}, in_family={cls.in_family}, "
+                    f"reasoning='{cls.reasoning}'",
+        ))
 
         # ----- Phase 3: Direct dispatch -------------------------------
         leaf = self.leaf_registry.get((cls.tier, question))
@@ -435,6 +673,59 @@ class Orchestrator:
         raise NoKnownReduction(cls, reductions_applied)
 
     # -- Helpers ------------------------------------------------------------
+
+    def _classify_problem(self, problem: Any) -> Tuple[Optional[Classification], str]:
+        """Auto-detect the problem type and dispatch to the right classifier.
+
+        Recognises:
+          - GRAPH dict with 'rotation' key (after normalisation, this is
+            the canonical form) -> classify_graph
+          - CONSTRAINT-SET dict with 'A' key (and optionally 'b', 'Q', 'c',
+            'modulus') -> classify_constraint_set
+          - SIGNATURE dict with 'values' key (sequence of Hamming-weight-
+            indexed values) -> classify_signature
+          - Problem dict with explicit 'kind' field:
+              'graph', 'constraint_set', 'signature'
+
+        Returns (Classification, classifier_name) on success; (None, "")
+        if the problem doesn't match any known type.
+
+        When you add a new problem type, add a branch here AND a leaf
+        evaluator entry in DEFAULT_LEAF_REGISTRY for the relevant
+        (tier, question) pairs.
+        """
+        if not isinstance(problem, dict):
+            return None, ""
+        # Explicit kind dispatch first (most reliable).
+        kind = problem.get("kind")
+        if kind == "graph":
+            return (classify_graph(problem["data"]["rotation"]
+                                     if "data" in problem
+                                     else problem.get("rotation", {})),
+                    "classify_graph")
+        if kind == "constraint_set":
+            data = problem.get("data", problem)
+            return (classify_constraint_set(**{
+                k: data.get(k) for k in ("A", "b", "Q", "c", "modulus")
+                if data.get(k) is not None
+            }), "classify_constraint_set")
+        if kind == "signature":
+            data = problem.get("data", problem)
+            return (classify_signature(data["values"]), "classify_signature")
+        # Heuristic dispatch based on dict keys.
+        if "rotation" in problem:
+            return classify_graph(problem["rotation"]), "classify_graph"
+        if "A" in problem:
+            return (classify_constraint_set(
+                A=problem["A"],
+                b=problem.get("b"),
+                Q=problem.get("Q"),
+                c=problem.get("c"),
+                modulus=problem.get("modulus", 2),
+            ), "classify_constraint_set")
+        if "values" in problem:
+            return classify_signature(problem["values"]), "classify_signature"
+        return None, ""
 
     def _try_hybrid_decomposition(self, problem, extra_edges, *, origin):
         """Apply HybridDecomposition with the given extras; evaluate the
