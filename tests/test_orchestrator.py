@@ -164,3 +164,27 @@ def test_orchestrator_unknown_problem_type():
     orch = Orchestrator()
     with pytest.raises(NoKnownReduction):
         orch.evaluate({"unknown_kind": "weirdness"}, question="anything")
+
+
+def test_orchestrator_treewidth_dp_hint():
+    """When a tree_decomposition hint is supplied and direct dispatch is
+    NOT available for the (tier, question), the orchestrator falls back
+    to TreewidthBoundedDP."""
+    from structural_computing import DEFAULT_LEAF_REGISTRY
+    # Force the fallback by removing matching_count leaf evaluators.
+    reg = {k: v for k, v in DEFAULT_LEAF_REGISTRY.items() if k[1] != "matching_count"}
+    orch = Orchestrator(leaf_registry=reg)
+    C4 = {
+        "rotation": {0: [1, 3], 1: [0, 2], 2: [1, 3], 3: [0, 2]},
+        "vertices": [0, 1, 2, 3],
+        "edges": [(0, 1), (1, 2), (2, 3), (3, 0)],
+    }
+    td = {"bags": [{0, 1, 3}, {1, 2, 3}], "tree_edges": [(0, 1)],
+          "root_bag_index": 0}
+    r = orch.evaluate(C4, "matching_count", hints={"tree_decomposition": td})
+    assert r.answer == 2
+    # The reductions_applied list records that TreewidthBoundedDP fired.
+    assert any("TreewidthBoundedDP" in s for s in r.reductions_applied)
+    # The workflow trace's treewidth-dp phase fired with outcome ok.
+    phases_and_outcomes = [(s.phase, s.outcome) for s in r.workflow_trace]
+    assert ("treewidth-dp", "ok") in phases_and_outcomes

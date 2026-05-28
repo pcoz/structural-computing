@@ -58,7 +58,12 @@ from .transform import (
     NormaliseGraphFormat,
 )
 from .compose import Composition, CompositionPlan, LinearCombination
-from .decompose import Decomposition, DecompositionPlan, ShannonExpansion
+from .decompose import (
+    Decomposition,
+    DecompositionPlan,
+    ShannonExpansion,
+    TreewidthBoundedDP,
+)
 from .verifier import (
     brute_force_count_matchings,
     enumerate_satisfying_assignments,
@@ -583,6 +588,40 @@ class Orchestrator:
             except (ReductionNotApplicable, NoKnownReduction) as e:
                 workflow_trace.append(WorkflowStep(
                     phase="hint-driven", action="HybridDecomposition(via hints)",
+                    outcome="failed", detail=str(e),
+                ))
+
+        # ----- Phase 4.5: Tree-decomposition DP (hint-driven) ---------
+        # If the user supplied a tree decomposition AND the question is
+        # matching_count, run TreewidthBoundedDP. This is exact poly-time
+        # for bounded-treewidth graphs even if non-planar.
+        if "tree_decomposition" in hints and question == "matching_count":
+            try:
+                td = hints["tree_decomposition"]
+                decomp = TreewidthBoundedDP(tree_decomposition=td)
+                plan = decomp.decompose(problem)
+                # Plan is precomputed-value -- evaluate just returns it.
+                answer = plan.evaluate(lambda _p: 0)
+                workflow_trace.append(WorkflowStep(
+                    phase="treewidth-dp",
+                    action="TreewidthBoundedDP(tree_decomposition=...)",
+                    outcome="ok",
+                    detail=f"answer={answer}, bags={len(td.get('bags', []))}",
+                ))
+                reductions_applied.append(
+                    f"TreewidthBoundedDP(bags={len(td.get('bags', []))})")
+                return OrchestratorResult(
+                    answer=answer,
+                    classification=cls,
+                    reductions_applied=reductions_applied,
+                    sub_evaluations=1,                    # the DP is one batched eval
+                    leaf_evaluator_used="TreewidthBoundedDP(internal-DP)",
+                    workflow_trace=workflow_trace,
+                )
+            except (NotImplementedError, ValueError) as e:
+                workflow_trace.append(WorkflowStep(
+                    phase="treewidth-dp",
+                    action="TreewidthBoundedDP(tree_decomposition=...)",
                     outcome="failed", detail=str(e),
                 ))
 
