@@ -6,6 +6,69 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 once it reaches v1.0.0; until then, the v0.x API may shift between minor
 versions.
 
+## [0.2.0a1] — 2026-05-28 (v0.2 alpha — reductions layer)
+
+**v0.2 closes the v0.1 NotImplementedError gaps** with real
+constructions from the matchgate-Holant literature, plus a richer
+orchestrator surface.
+
+### Reductions (transform.py)
+- `HybridDecomposition` — full Tutte/Lovasz-Plummer DP on extra edges
+  (`M(G) = M(G-e) + M(G/uv)` recursion); auto-discovery via
+  `auto_detect_extras` greedy genus heuristic.
+- `RationaliseWeights` — real-valued edge weights scaled to integers
+  at user-chosen precision, with inverse to descale the final answer.
+- `CrossingElimination` — Cai-Gorenstein 6-vertex/7-edge crossover
+  gadget at each declared crossing (arXiv:1303.6729 Fig. 6). Preserves
+  matchgate signature (signed Pfaffian), not unsigned PerfMatch in
+  general; docstring is explicit about this.
+- `HighDegreeVertexSplit` — Cai-Gorenstein 2k-node triangle-cycle
+  realisation of matchgate-realisable symmetric signatures (Theorem 9
+  + Fig. 10); odd-arity case via Fig. 11. All 16 entries of `[2, 0, 6,
+  0, 18]` match brute-force PerfMatch exactly.
+
+### Compositions (compose.py)
+- `HolographicBasisPair` — Cai-Lu 2011 polynomial-substitution basis
+  change on symmetric signatures + matchgate-realisability check via
+  the order-2 recurrence rank test (Theorem 2.5). Hadamard basis
+  transforms 3-AND [1,0,0,1] into matchgate-standard [0,2,0,2].
+  Result type `HolographicBasisResult` carries the transformed values,
+  realisability flag, and (when realisable) the (a, b, c) kernel vector.
+
+### Decompositions (decompose.py)
+- `TreewidthBoundedDP` — full Bodlaender-style multi-bag DP for
+  matching count on bounded-treewidth graphs (single-bag was v0.1).
+
+### Orchestrator
+- 7-phase workflow with new phases:
+  - Phase 1.5 `rationalise` — hint-driven `RationaliseWeights`.
+  - Phase 4.5 `treewidth-dp` — hint-driven `TreewidthBoundedDP`.
+  - Phase 4.7 `crossing-elimination` — hint-driven `CrossingElimination`.
+- New leaf evaluators:
+  - `weighted_matching_sum` for T2/T4 graphs.
+  - `matchgate_realisation` for T2/T3 signatures (via
+    `HighDegreeVertexSplit`).
+- `verbose=True` + custom `log=...` parameters stream each step + reason
+  as the orchestrator runs.
+- `OrchestratorResult.workflow_trace` carries the full audit trail of
+  phases attempted, with outcome + detail per step.
+
+### Verifier
+- `brute_force_weighted_matching_sum` — exact weighted
+  perfect-matching reference for testing weighted reductions.
+
+### Examples
+- 7 self-contained examples (numbered 05-11) covering: hybrid
+  decomposition, signature classification, treewidth DP, rationalise
+  weights, holographic basis unlock, crossing elimination, high-degree
+  vertex split.
+
+### Research artefacts (private repo)
+- `admissibility-geometry/research/{crossing_elimination_cai_gorenstein,
+  high_degree_vertex_split_symmetric_matchgate,
+  holographic_basis_pair_cai_lu}.md` carry the full literature
+  extractions used to ship the constructions.
+
 ## [0.1.0a1] — 2026-05-28 (initial alpha)
 
 **The first packaged form of the declarative structural computation

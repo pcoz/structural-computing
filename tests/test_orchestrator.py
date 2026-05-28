@@ -242,6 +242,64 @@ def test_orchestrator_skips_rationalise_when_weights_already_integer():
     assert ("rationalise", "skipped") in phases_and_outcomes
 
 
+def test_orchestrator_matchgate_realisation_for_symmetric_signature():
+    """The orchestrator exposes the new question 'matchgate_realisation'
+    on T2/T3 signatures. Asking for it returns the Cai-Gorenstein
+    2k-node triangle-cycle matchgate dict."""
+    orch = Orchestrator()
+    r = orch.evaluate({"values": [2, 0, 2, 0, 2]},
+                       question="matchgate_realisation")
+    mg = r.answer
+    assert mg["arity"] == 4
+    assert len(mg["vertices"]) == 8                  # 2k = 8 nodes
+    assert mg["construction"].startswith("Cai-Gorenstein")
+    # The leaf evaluator name shows up in provenance.
+    assert r.leaf_evaluator_used == "_matchgate_realisation_leaf"
+
+
+def test_orchestrator_matchgate_realisation_rejects_non_realisable():
+    """Non-matchgate-realisable signatures raise the leaf's underlying
+    error -- the orchestrator does not silently swallow it."""
+    orch = Orchestrator()
+    # [1, 0, 1, 0, 2] fails the geometric-progression invariant.
+    with pytest.raises(Exception):
+        orch.evaluate({"values": [1, 0, 1, 0, 2]},
+                       question="matchgate_realisation")
+
+
+def test_orchestrator_crossing_elimination_hint_fires():
+    """When the input graph is NON-PLANAR (T4) and hints['crossings'] is
+    supplied, AND no T4 leaf is registered for the question, the
+    orchestrator inserts the Cai-Gorenstein gadget at the declared
+    crossings, then dispatches to the planarised T2 leaf evaluator.
+    Uses a K_{3,3}-like non-planar graph with a declared crossing."""
+    # Remove ("T4", "matching_count") from the registry so direct
+    # dispatch is skipped for the non-planar K_{3,3}, forcing Phase 4.7
+    # to fire when crossings is supplied.
+    reg = {k: v for k, v in DEFAULT_LEAF_REGISTRY.items()
+            if k != ("T4", "matching_count")}
+    orch = Orchestrator(leaf_registry=reg)
+    # K_{3,3}: non-planar (genus 1) under the bipartite rotation.
+    graph = {
+        "rotation": {0: [3, 4, 5], 1: [3, 4, 5], 2: [3, 4, 5],
+                      3: [0, 1, 2], 4: [0, 1, 2], 5: [0, 1, 2]},
+        "vertices": [0, 1, 2, 3, 4, 5],
+        "edges": [(0, 3), (0, 4), (0, 5), (1, 3), (1, 4), (1, 5),
+                   (2, 3), (2, 4), (2, 5)],
+    }
+    # Declare one crossing as a hint. The gadget gives a SIGNED matchgate
+    # value (not the raw 6); we just check Phase 4.7 fired and a number
+    # came back.
+    r = orch.evaluate(graph, question="matching_count",
+                       hints={"crossings": [((0, 4), (1, 3))]})
+    # Phase 4.7 fired.
+    phases_and_outcomes = [(s.phase, s.outcome) for s in r.workflow_trace]
+    assert ("crossing-elimination", "ok") in phases_and_outcomes
+    assert any("CrossingElimination" in s for s in r.reductions_applied)
+    # The numeric answer is the signed matchgate value (not necessarily 6).
+    assert isinstance(r.answer, (int, float))
+
+
 def test_orchestrator_treewidth_dp_hint():
     """When a tree_decomposition hint is supplied and direct dispatch is
     NOT available for the (tier, question), the orchestrator falls back

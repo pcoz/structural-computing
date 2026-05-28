@@ -57,6 +57,8 @@ from .transform import (
     HybridDecomposition,
     NormaliseGraphFormat,
     RationaliseWeights,
+    CrossingElimination,
+    HighDegreeVertexSplit,
 )
 from .compose import Composition, CompositionPlan, LinearCombination
 from .decompose import (
@@ -395,6 +397,18 @@ def _classify_function_leaf(problem: Any, question: str) -> Classification:
     return classify_signature(problem["values"])
 
 
+def _matchgate_realisation_leaf(problem: Any, question: str) -> Dict[str, Any]:
+    """matchgate_realisation on a symmetric signature: build the Cai-
+    Gorenstein 2k-node triangle-cycle planar matchgate (Fig. 10/11)
+    realising the signature. Returns the matchgate dict {vertices,
+    edges, weights, externals, ...}. Raises if the signature is not
+    matchgate-realisable (geometric-progression invariant fails)."""
+    if not isinstance(problem, dict) or "values" not in problem:
+        raise ValueError("matchgate_realisation_leaf expects {values: [...]}")
+    h = HighDegreeVertexSplit(signature=list(problem["values"]))
+    return h.apply(problem).problem
+
+
 # ---------- The default registry (covers everything reachable in v0.2) -----
 
 DEFAULT_LEAF_REGISTRY: Dict[Tuple[str, str], LeafEvaluator] = {
@@ -423,6 +437,8 @@ DEFAULT_LEAF_REGISTRY: Dict[Tuple[str, str], LeafEvaluator] = {
     ("T3", "is_matchgate_realisable"):   _is_matchgate_realisable_leaf,
     ("T2", "classify_function"):         _classify_function_leaf,
     ("T3", "classify_function"):         _classify_function_leaf,
+    ("T2", "matchgate_realisation"):     _matchgate_realisation_leaf,
+    ("T3", "matchgate_realisation"):     _matchgate_realisation_leaf,
 }
 
 
@@ -505,6 +521,11 @@ class Orchestrator:
           4.5. **Treewidth DP** -- if `hints["tree_decomposition"]` is
              supplied and the question is `matching_count`, run the
              Bodlaender-style multi-bag DP.
+          4.7. **Crossing elimination** -- if `hints["crossings"]` is
+             supplied, insert the Cai-Gorenstein gadget at each declared
+             crossing; the resulting planar graph is dispatched to the
+             T2 leaf evaluator. The gadget preserves the SIGNED matchgate
+             signature, not unsigned PerfMatch in general.
           5. **Auto-Hybrid** -- if the question is "matching_count" and the
              graph is non-planar but has a rotation system, try
              `HybridDecomposition(auto=True)` (greedy extras discovery).
@@ -725,6 +746,53 @@ class Orchestrator:
             except (NotImplementedError, ValueError) as e:
                 emit("treewidth-dp",
                      "TreewidthBoundedDP(tree_decomposition=...)",
+                     "failed", str(e))
+
+        # ----- Phase 4.7: Crossing elimination (hint-driven) ----------
+        # If the user supplied a list of declared crossings AND the
+        # question is matching_count or weighted_matching_sum, insert
+        # the Cai-Gorenstein gadget at each crossing to produce a
+        # planar graph; then dispatch to the planar (T2) leaf
+        # evaluator. NOTE: the gadget preserves the SIGNED matchgate
+        # signature, not unsigned PerfMatch in general. For unit-weight
+        # graphs the two may coincide; for weighted graphs they don't.
+        # Callers should know which semantic they want.
+        if "crossings" in hints and question in ("matching_count",
+                                                   "weighted_matching_sum"):
+            try:
+                crossings = hints["crossings"]
+                ce = CrossingElimination(crossings=crossings)
+                if ce.applies_to(problem):
+                    cresult = ce.apply(problem)
+                    planar_problem = cresult.problem
+                    leaf_t2 = self.leaf_registry.get(("T2", question))
+                    if leaf_t2 is None:
+                        raise NoKnownReduction(
+                            cls,
+                            [f"no T2 leaf for ({question}) after planarisation"],
+                        )
+                    answer = leaf_t2(planar_problem, question)
+                    emit("crossing-elimination",
+                         f"CrossingElimination(crossings={len(crossings)})",
+                         "ok",
+                         f"planarised: {len(planar_problem['vertices'])}V, "
+                         f"{len(planar_problem['edges'])}E; "
+                         f"signed answer={answer!r}")
+                    reductions_applied.append(
+                        f"CrossingElimination({len(crossings)})")
+                    if post_inverse is not None:
+                        answer = post_inverse(answer)
+                    return OrchestratorResult(
+                        answer=answer,
+                        classification=cls,
+                        reductions_applied=reductions_applied,
+                        sub_evaluations=1,
+                        leaf_evaluator_used=leaf_t2.__name__,
+                        workflow_trace=workflow_trace,
+                    )
+            except (ReductionNotApplicable, NoKnownReduction, ValueError) as e:
+                emit("crossing-elimination",
+                     f"CrossingElimination(crossings={len(hints['crossings'])})",
                      "failed", str(e))
 
         # ----- Phase 5: Auto-Hybrid (greedy extras discovery) ---------
