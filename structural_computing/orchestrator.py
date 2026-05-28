@@ -670,6 +670,18 @@ class Orchestrator:
              f"tier={cls.tier}, in_family={cls.in_family}, "
              f"reasoning='{cls.reasoning}'")
 
+        # If calibration data has been loaded for (tier, question), emit
+        # a separate "predict" step that records the expected wall-clock
+        # cost. This is informational; the dispatch decision is unaffected.
+        from .calibration import has_calibration_for as _has_cal, predict_seconds as _predict
+        from .route import _size_hint_for as _size_hint
+        if _has_cal(cls.tier, question):
+            n = _size_hint(cls.tier, cls.meters)
+            pred = _predict(cls.tier, question, n=n)
+            if pred is not None:
+                emit("predict", f"calibrated_predict({cls.tier}, {question})", "ok",
+                     f"predicted_seconds={pred:.6g}, size={n}")
+
         # ----- Phase 3: Direct dispatch -------------------------------
         leaf = self.leaf_registry.get((cls.tier, question))
         if leaf is not None and cls.in_family:

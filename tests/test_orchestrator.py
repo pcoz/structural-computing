@@ -242,6 +242,39 @@ def test_orchestrator_skips_rationalise_when_weights_already_integer():
     assert ("rationalise", "skipped") in phases_and_outcomes
 
 
+def test_orchestrator_emits_predict_step_when_calibrated():
+    """When calibration is loaded for (tier, question), the orchestrator
+    emits a 'predict' workflow step before direct dispatch, surfacing
+    the predicted seconds. Without calibration, the step is omitted."""
+    from structural_computing import apply_calibration, clear_calibration
+    clear_calibration()
+    apply_calibration({
+        ("T2", "matching_count"): {
+            "model": "power_law", "params": (1e-7, 3.0), "rms": 0.05,
+        },
+    })
+    try:
+        orch = Orchestrator()
+        r = orch.evaluate(K4_TETRAHEDRON, question="matching_count")
+        phases = [s.phase for s in r.workflow_trace]
+        assert "predict" in phases
+        predict_steps = [s for s in r.workflow_trace if s.phase == "predict"]
+        assert predict_steps[0].outcome == "ok"
+        assert "predicted_seconds=" in predict_steps[0].detail
+    finally:
+        clear_calibration()
+
+
+def test_orchestrator_omits_predict_step_without_calibration():
+    """No calibration -> no predict step in the workflow trace."""
+    from structural_computing import clear_calibration
+    clear_calibration()
+    orch = Orchestrator()
+    r = orch.evaluate(K4_TETRAHEDRON, question="matching_count")
+    phases = [s.phase for s in r.workflow_trace]
+    assert "predict" not in phases
+
+
 def test_orchestrator_matchgate_realisation_for_symmetric_signature():
     """The orchestrator exposes the new question 'matchgate_realisation'
     on T2/T3 signatures. Asking for it returns the Cai-Gorenstein
