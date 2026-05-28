@@ -409,6 +409,48 @@ def _matchgate_realisation_leaf(problem: Any, question: str) -> Dict[str, Any]:
     return h.apply(problem).problem
 
 
+def _discover_basis_leaf(problem: Any, question: str) -> Optional[Dict[str, Any]]:
+    r"""discover_basis on a symmetric signature (T2 or T3): run the
+    practical Cai-Lu SRP search for a 2x2 basis T such that T applied
+    to the signature yields a Cai-Gorenstein Theorem-9 standard-basis
+    matchgate form. Returns ``{"basis_matrix": T, "transformed_values":
+    [...]}`` on success, or ``None`` when no basis is found."""
+    from .compose import HolographicBasisPair as _HBP
+    if not isinstance(problem, dict) or "values" not in problem:
+        raise ValueError("discover_basis_leaf expects {values: [...]}")
+    h = _HBP()
+    discovery = h.discover_basis(list(problem["values"]))
+    if discovery is None:
+        return None
+    T, result = discovery
+    return {
+        "basis_matrix":      T.tolist(),
+        "transformed_values": result.values,
+        "is_realisable":     result.is_realisable,
+    }
+
+
+def _discover_common_basis_leaf(problem: Any, question: str) -> Optional[Dict[str, Any]]:
+    r"""discover_common_basis on a multi-signature problem: take
+    ``problem["signatures"] = [sig_1, sig_2, ...]`` and search for one
+    basis T that puts every signature into matchgate-standard form
+    (Cai-Lu 2011 §4 SRP). Returns ``{"basis_matrix": T,
+    "transformed_signatures": [[...], [...], ...]}`` on success, or
+    ``None`` when no common basis is found."""
+    from .compose import HolographicBasisPair as _HBP
+    if not isinstance(problem, dict) or "signatures" not in problem:
+        raise ValueError("discover_common_basis_leaf expects {signatures: [[...], ...]}")
+    h = _HBP()
+    discovery = h.discover_common_basis(list(problem["signatures"]))
+    if discovery is None:
+        return None
+    T, results = discovery
+    return {
+        "basis_matrix":           T.tolist(),
+        "transformed_signatures": [r.values for r in results],
+    }
+
+
 def _holographic_transform_general_leaf(problem: Any, question: str) -> Dict[str, Any]:
     """holographic_transform on a GENERAL (non-symmetric) signature:
     apply ``T^{otimes a}`` to the length-2^arity values tensor.
@@ -465,6 +507,10 @@ DEFAULT_LEAF_REGISTRY: Dict[Tuple[str, str], LeafEvaluator] = {
     ("T3", "classify_function"):         _classify_function_leaf,
     ("T2", "matchgate_realisation"):     _matchgate_realisation_leaf,
     ("T3", "matchgate_realisation"):     _matchgate_realisation_leaf,
+    # Cai-Lu SRP single- and multi-signature search.
+    ("T2", "discover_basis"):            _discover_basis_leaf,
+    ("T3", "discover_basis"):            _discover_basis_leaf,
+    ("T3", "discover_common_basis"):     _discover_common_basis_leaf,
     # General (non-symmetric) holographic transform on a 2^a tensor.
     ("T3", "holographic_transform_general"): _holographic_transform_general_leaf,
 }
@@ -554,6 +600,15 @@ class Orchestrator:
              crossing; the resulting planar graph is dispatched to the
              T2 leaf evaluator. The gadget preserves the SIGNED matchgate
              signature, not unsigned PerfMatch in general.
+          4.8. **Planar separator** -- if `hints["planar_separator"]` is
+             supplied (with keys ``separator``, ``side_a``, ``side_b``),
+             run the divide-and-conquer separator decomposition; sum
+             over (S_to_A, S_to_B, S_pairs) partitions weighted by
+             restricted-PerfMatch products.
+          4.9. **Circuit cut** -- if `hints["circuit_cut"]` is supplied
+             (an iterable of edges), enumerate 2^|cut| forced-in /
+             forced-out assignments via the Tutte / Lovasz-Plummer
+             identity presented as a decomposition tree.
           5. **Auto-Hybrid** -- if the question is "matching_count" and the
              graph is non-planar but has a rotation system, try
              `HybridDecomposition(auto=True)` (greedy extras discovery).
@@ -835,6 +890,87 @@ class Orchestrator:
                      f"CrossingElimination(crossings={len(hints['crossings'])})",
                      "failed", str(e))
 
+        # ----- Phase 4.8: PlanarSeparator (hint-driven) ---------------
+        # If the user supplied hints["planar_separator"] = {"separator":
+        # ..., "side_a": ..., "side_b": ...} AND the question is
+        # matching_count / weighted_matching_sum, run the divide-and-
+        # conquer separator decomposition: enumerate partitions of the
+        # separator vertices, sum weighted products of restricted
+        # PerfMatches.
+        if ("planar_separator" in hints
+                and question in ("matching_count", "weighted_matching_sum")):
+            try:
+                from .decompose import PlanarSeparator as _PSep
+                sep_spec = hints["planar_separator"]
+                psep = _PSep(
+                    separator=sep_spec["separator"],
+                    side_a=sep_spec["side_a"],
+                    side_b=sep_spec["side_b"],
+                )
+                plan = psep.decompose(problem)
+                leaf_t2 = self.leaf_registry.get(("T2", question))
+                if leaf_t2 is None:
+                    raise NoKnownReduction(
+                        cls, [f"no T2 leaf for ({question}) post-separator"],
+                    )
+                answer = plan.evaluate(lambda p: leaf_t2(p, question))
+                if post_inverse is not None:
+                    answer = post_inverse(answer)
+                emit("planar-separator",
+                     (f"PlanarSeparator(|S|={len(sep_spec['separator'])})"),
+                     "ok",
+                     f"answer={answer!r}; {plan.notes}")
+                reductions_applied.append(
+                    f"PlanarSeparator(|S|={len(sep_spec['separator'])})")
+                return OrchestratorResult(
+                    answer=answer,
+                    classification=cls,
+                    reductions_applied=reductions_applied,
+                    sub_evaluations=len(plan.children),
+                    leaf_evaluator_used=leaf_t2.__name__,
+                    workflow_trace=workflow_trace,
+                )
+            except (ValueError, KeyError, NoKnownReduction) as e:
+                emit("planar-separator", "PlanarSeparator(via hints)",
+                     "failed", str(e))
+
+        # ----- Phase 4.9: RecursiveCircuitCut (hint-driven) -----------
+        # If the user supplied hints["circuit_cut"] (an iterable of
+        # edges to cut) AND the question is matching_count /
+        # weighted_matching_sum, enumerate 2^|cut| forced-in / forced-
+        # out assignments and sum.
+        if ("circuit_cut" in hints
+                and question in ("matching_count", "weighted_matching_sum")):
+            try:
+                from .decompose import RecursiveCircuitCut as _RCC
+                rcc = _RCC(cut=hints["circuit_cut"])
+                plan = rcc.decompose(problem)
+                leaf_t2 = self.leaf_registry.get(("T2", question))
+                if leaf_t2 is None:
+                    raise NoKnownReduction(
+                        cls, [f"no T2 leaf for ({question}) post-cut"],
+                    )
+                answer = plan.evaluate(lambda p: leaf_t2(p, question))
+                if post_inverse is not None:
+                    answer = post_inverse(answer)
+                emit("circuit-cut",
+                     f"RecursiveCircuitCut(|cut|={len(hints['circuit_cut'])})",
+                     "ok",
+                     f"answer={answer!r}; {plan.notes}")
+                reductions_applied.append(
+                    f"RecursiveCircuitCut(|cut|={len(hints['circuit_cut'])})")
+                return OrchestratorResult(
+                    answer=answer,
+                    classification=cls,
+                    reductions_applied=reductions_applied,
+                    sub_evaluations=len(plan.children),
+                    leaf_evaluator_used=leaf_t2.__name__,
+                    workflow_trace=workflow_trace,
+                )
+            except (ValueError, NoKnownReduction) as e:
+                emit("circuit-cut", "RecursiveCircuitCut(via hints)",
+                     "failed", str(e))
+
         # ----- Phase 5: Auto-Hybrid (greedy extras discovery) ---------
         if question == "matching_count" and not cls.in_family and "rotation" in problem:
             try:
@@ -976,6 +1112,16 @@ class Orchestrator:
                                 f"on a 2^a-dim tensor"),
                 ), "classify_signature_general")
             return classify_signature(problem["values"]), "classify_signature"
+        if "signatures" in problem and isinstance(problem["signatures"], list):
+            # MULTI-SIGNATURE problem (for Cai-Lu SRP common-basis search).
+            return (Classification(
+                tier="T3",
+                meters={"n_signatures": len(problem["signatures"]),
+                        "arities": [len(s) - 1 for s in problem["signatures"]]},
+                in_family=True,
+                reasoning=(f"multi-signature problem ({len(problem['signatures'])} "
+                            f"symmetric signatures) for SRP common-basis search"),
+            ), "classify_signatures_multi")
         return None, ""
 
     def _try_hybrid_decomposition(self, problem, extra_edges, *, origin):

@@ -328,7 +328,11 @@ class NormaliseGraphFormat:
             return True
         if isinstance(problem, dict) and problem:
             # Disambiguate dicts: skip if it's a non-graph typed dict.
-            if any(k in problem for k in ("A", "values")):
+            # ("A", "b") = constraint set; ("values",) = signature;
+            # ("signatures",) = multi-signature; ("basis_matrix",) = a
+            # holographic-transform problem; ("arity",) = signature-like.
+            if any(k in problem for k in (
+                    "A", "values", "signatures", "basis_matrix", "arity")):
                 return False
             kind = problem.get("kind")
             if kind is not None and kind != "graph":
