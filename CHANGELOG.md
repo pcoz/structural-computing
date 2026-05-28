@@ -94,19 +94,64 @@ What this release **is not**:
   via
   [`ORIENTATION.md`](https://github.com/pcoz/admissibility-geometry/blob/main/ORIENTATION.md).
 
-## [Unreleased]
+## [Unreleased] — v0.1.0a2 follow-up work
 
-Coming in v0.1.0:
-- `tests/` directory with pytest coverage of all primitives.
-- CI matrix (Linux/macOS/Windows × Python 3.10-3.13).
-- `tests/originality/` — dart-chain demo, basis-aware rank checks,
-  MC comparison as proper pytest fixtures.
-- Expanded `StructuralComputer` API: first-class methods for
-  constraint sets and signatures.
+Shipped after v0.1.0a1 in the same session:
+
+- `.github/workflows/test.yml` — CI matrix
+  (Linux/macOS/Windows × Python 3.10–3.13).
+- `.github/workflows/publish.yml` — Trusted Publisher to PyPI on release
+  (with manual TestPyPI option).
+- `tests/test_replay.py` — ~20 tests for `ReplayCache` including the
+  new LRU eviction.
+- `tests/originality/test_dart_chain.py` — asserts the dart-chain
+  corrected primitive's 4×4-torus disagree-case is still resolved
+  correctly, plus empirical stress on 30 random K_5 and K_{3,3}
+  rotations.
+- `tests/originality/test_basis_aware_rank.py` — asserts every classical
+  symmetric signature (OR, AND, XOR, MAJORITY, EXACTLY-K, ALL-OR-NOTHING,
+  ...) has basis-aware matchgate rank in {0, 1, 2}; parametrised over
+  17 signatures plus scaling tests.
+- `tests/test_constraints.py` — ~17 tests for the new
+  constraint-set and signature methods on `StructuralComputer`.
+- `ReplayCache(maxsize=N)` — LRU eviction policy. Backward-compatible:
+  default `maxsize=None` is unbounded (the existing v0.1.0a1 behaviour).
+  Tracks an `evictions` statistic alongside hits / misses.
+- **`StructuralComputer` constraint-set API:**
+  - `sc.classify_constraints(A, b, Q=None, c=None, modulus=2)` — emit the
+    `Classification` for a constraint set.
+  - `sc.count_solutions(A, b, Q=None, c=None, modulus=2)` — exact count.
+    Pure GF(2)-affine (T0) is poly-time via Gaussian elimination at any
+    n; T1 (with quadratic part) brute-forces at n ≤ 24.
+  - `sc.find_witness_solution(A, b, Q=None, c=None, modulus=2)` — one
+    specific solution. T0 via Gaussian elimination (poly-time);
+    T1 brute force at small n. Returns None if infeasible.
+  - `sc.list_solutions(A, b, Q=None, c=None, modulus=2)` — all
+    solutions; brute force at n ≤ 20.
+- **`StructuralComputer` signature API:**
+  - `sc.classify_function(values)` — emit Classification for a symmetric
+    signature.
+  - `sc.matchgate_rank(values)` — basis-aware rank in {0, 1, 2}.
+  - `sc.is_matchgate_realisable(values)` — boolean shortcut.
+- **Scope-language reframe** in `README.md` — defensive "most problems
+  don't have this shape" replaced with the active "natively-in-family +
+  reductions + compositions + recursive decomposition + honest stops
+  only when no such structure exists" framing. The
+  reduction/composition/recursive-decomposition layer is filed as the
+  largest active development direction.
+- **Helper-function comment sweep** — `_gf2_rank`, `_gf2_solve_one`,
+  `_bits_to_int`, `_as_array` got fully-explained docstrings covering
+  algorithm, invariants, edge cases, and the framework's bit-ordering
+  conventions.
 
 Coming in v0.2.0:
-- ReplayCache eviction policy (LRU or size-bounded).
-- Calibrated cost models in `route` (replace the `2 log2 n` surrogate
+- Reduction layer (`transform.py`) with crossing-elimination gadgets
+  for near-planar graphs as the first reduction.
+- Composition layer (`compose.py`) with holographic basis pairs and
+  linear-combination composition.
+- Recursive-decomposition layer (`decompose.py`) with
+  treewidth-bounded DP as the first decomposition.
+- Calibrated cost models in `route.py` (replace the `2 log2 n` surrogate
   with benchmark-measured constants per tier).
 - Matching-polynomial form for `tail_probability` on larger graphs.
 

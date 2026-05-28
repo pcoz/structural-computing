@@ -37,6 +37,8 @@ import math
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
+import numpy as np
+
 import holant_tools
 
 from .classify import (Classification, classify_graph,
@@ -120,6 +122,138 @@ class CompareReport:
         return (f"Configuration {winner} is {rel:.1%} more reliable "
                 f"({self.quantity_a:.4e} vs {self.quantity_b:.4e}). "
                 f"This distinction is provably real (exact computation), not a sampling artefact.")
+
+
+def _as_array(arr) -> np.ndarray:
+    """Coerce a Python list, nested list, tuple, or existing np.ndarray
+    into an int-dtype np.ndarray.
+
+    The wrapper's constraint-set methods accept callers' inputs in any of
+    these forms (most users write `[[1, 0, 1], [0, 1, 1]]` not
+    `np.array([[1, 0, 1], [0, 1, 1]], dtype=int)`). This helper normalises
+    them so the rest of the code can assume np.ndarray.
+    """
+    return np.asarray(arr, dtype=int)
+
+
+def _gf2_rank(M: np.ndarray) -> int:
+    """Rank of a 0/1 matrix over GF(2), the two-element field where
+    addition is XOR and multiplication is AND.
+
+    Algorithm: standard Gaussian elimination, with the twist that we
+    XOR rows instead of subtracting (which is the same thing mod 2).
+    For each column from left to right:
+
+      1. Find a row at or below the current pivot row whose entry in
+         this column is 1.
+      2. If none exists, this column has no pivot -- move on.
+      3. Otherwise, swap that row up to the pivot position, then XOR
+         this row into every other row that has a 1 in this column
+         (clearing the column elsewhere).
+      4. Advance the pivot row counter.
+
+    The rank is the number of pivots placed -- equivalently, the number
+    of linearly-independent rows of `M` over GF(2). For an `m x n`
+    matrix with `m <= n`, this runs in `O(m^2 * n)`.
+
+    Returns 0 for empty / None inputs (convenient for the constraint-set
+    classifier's edge cases).
+    """
+    if M is None or M.size == 0:
+        return 0
+    # Work on a deep copy as nested Python lists -- avoids mutating the
+    # caller's input and lets us XOR rows with simple list comprehensions.
+    rows = [list(map(int, row)) for row in M]
+    n_rows = len(rows)
+    n_cols = len(rows[0]) if rows else 0
+    rank = 0
+    for col in range(n_cols):
+        # Find a pivot row: at or below `rank`, with a 1 in this column.
+        pv = next((r for r in range(rank, n_rows) if rows[r][col] == 1), None)
+        if pv is None:
+            # No pivot available for this column; move on.
+            continue
+        # Swap the pivot row up to the current rank position.
+        rows[rank], rows[pv] = rows[pv], rows[rank]
+        # Eliminate this column from every OTHER row.
+        for r in range(n_rows):
+            if r != rank and rows[r][col] == 1:
+                rows[r] = [(a ^ b) for a, b in zip(rows[r], rows[rank])]
+        rank += 1
+    return rank
+
+
+def _gf2_solve_one(A: np.ndarray, b: np.ndarray) -> Optional[np.ndarray]:
+    """Find one solution `x` to `A x = b (mod 2)`, or None if no solution
+    exists.
+
+    Returns the solution as a length-n integer vector (np.ndarray dtype
+    int) with entries in {0, 1}. When the system has multiple solutions
+    (i.e. when `A` is not full column rank), this returns the one obtained
+    by setting all free variables to 0 -- a deterministic choice that's
+    convenient for `find_witness_solution` callers.
+
+    Algorithm: augment `[A | b]` and Gauss-Jordan over GF(2):
+
+      1. Row-reduce as in `_gf2_rank`, tracking which column each pivot
+         lands in.
+      2. After reduction, check consistency: if any reduced row is
+         all zeros in the A-part but has a 1 in the b-part, the system
+         is `0 = 1` and infeasible.
+      3. Otherwise, read off the solution: for each pivot column, the
+         pivot row directly gives the variable's value; free variables
+         get value 0.
+
+    Returns None on infeasibility. Runs in `O(m^2 * n)` for `m x n` `A`.
+    """
+    m, n = A.shape
+    # Build the augmented matrix as Python lists for easy row XOR.
+    rows = [list(map(int, A[i])) + [int(b[i])] for i in range(m)]
+    pivots: Dict[int, int] = {}                 # column index -> pivot row
+    row = 0
+    for col in range(n):
+        sel = next((rr for rr in range(row, m) if rows[rr][col]), None)
+        if sel is None:
+            # Free variable; will end up zero in the witness.
+            continue
+        rows[row], rows[sel] = rows[sel], rows[row]
+        # Eliminate this column from every other row (Gauss-Jordan, not
+        # just Gauss -- we want to read solutions off the reduced form
+        # directly, so we clear above the pivot too).
+        for rr in range(m):
+            if rr != row and rows[rr][col]:
+                rows[rr] = [(a ^ b) for a, b in zip(rows[rr], rows[row])]
+        pivots[col] = row
+        row += 1
+    # Consistency: any row with all zeros in [0:n] but a 1 in [n] is the
+    # system claiming `0 = 1`, which means infeasible.
+    for r in range(m):
+        if rows[r][n] == 1 and not any(rows[r][:n]):
+            return None
+    # Build the witness: pivot variables take the value sitting in the
+    # b-column of their pivot row; free variables remain 0.
+    x = np.zeros(n, dtype=int)
+    for col, rrow in pivots.items():
+        x[col] = rows[rrow][n]
+    return x
+
+
+def _bits_to_int(bits: np.ndarray) -> int:
+    """Convert a length-n bit vector to an integer using the
+    "bit 0 = most-significant" convention.
+
+    The framework uses this convention throughout (it matches how the
+    underlying classify/route functions index bits). So `[1, 0, 1]`
+    becomes `0b101 = 5`, NOT `0b001 reversed = 5`. The point is to be
+    consistent across the package, not to follow any particular external
+    convention.
+    """
+    n = len(bits)
+    val = 0
+    for i in range(n):
+        if int(bits[i]) & 1:
+            val |= 1 << (n - 1 - i)
+    return val
 
 
 class StructuralComputer:
@@ -243,6 +377,182 @@ class StructuralComputer:
             relative_difference=rel,
             more_reliable=verdict,
         )
+
+    # -- constraint sets ----------------------------------------------------
+
+    def classify_constraints(self,
+                              A=None,
+                              b=None,
+                              Q=None,
+                              c=None,
+                              modulus: int = 2) -> Classification:
+        """Return the Classification for a constraint set: linear part
+        `A x = b (mod modulus)` plus an optional quadratic part
+        `x^T Q_i x = c_i (mod 2)`. Tier T0 for affine, T1 for quadratic,
+        T7 for mod-p != 2."""
+        A_arr = _as_array(A) if A is not None else None
+        b_arr = _as_array(b) if b is not None else None
+        Q_list = [_as_array(Qi) for Qi in Q] if Q else None
+        c_arr = _as_array(c) if c is not None else None
+        cls = classify_constraint_set(A=A_arr, b=b_arr, Q=Q_list, c=c_arr, modulus=modulus)
+        self._last_classification = cls
+        return cls
+
+    def count_solutions(self,
+                         A=None,
+                         b=None,
+                         Q=None,
+                         c=None,
+                         modulus: int = 2) -> int:
+        """Exact count of n-bit assignments x satisfying A x = b (mod modulus)
+        and (optionally) every x^T Q_i x = c_i (mod 2).
+
+        For pure GF(2)-affine constraints (no quadratic part), the count is
+        2^(n - rank(A)) over the satisfying affine subspace; computed
+        exactly via Gaussian elimination, poly-time at any n.
+
+        With a quadratic part, the wrapper brute-forces 2^n assignments
+        (capped at n <= 24). Raises ValueError for larger n; raises
+        NotInFamily for mod-p != 2 (the SRP-solver branch lives in
+        admissibility-geometry's tools/admissibility/).
+        """
+        cls = self.classify_constraints(A=A, b=b, Q=Q, c=c, modulus=modulus)
+        if not cls.in_family:
+            raise NotInFamily(cls)
+        A_arr = _as_array(A) if A is not None else None
+        b_arr = _as_array(b) if b is not None else None
+        n = int(A_arr.shape[1]) if (A_arr is not None and A_arr.size) else 0
+        if n == 0:
+            return 1 if Q is None or not Q else 0
+        if Q is None or not Q:
+            # T0: linear only; count = 2^(n - rank(A)).
+            rank = _gf2_rank(A_arr)
+            # Check feasibility: rank([A | b]) must equal rank(A).
+            Aug = np.hstack([A_arr, b_arr.reshape(-1, 1)]) if b_arr is not None else A_arr
+            if _gf2_rank(Aug) != rank:
+                return 0
+            return 2 ** (n - rank)
+        # T1: brute force at small n.
+        if n > 24:
+            raise ValueError(
+                f"count_solutions: n = {n} too large for the wrapper's "
+                f"brute-force quadratic enumeration (cap = 24). The "
+                f"reduction layer for T1 -> T0 is on the roadmap."
+            )
+        Q_list = [_as_array(Qi) for Qi in Q]
+        c_arr = _as_array(c) if c is not None else np.zeros(len(Q_list), dtype=int)
+        count = 0
+        for x in range(2 ** n):
+            bits = np.array([(x >> (n - 1 - i)) & 1 for i in range(n)], dtype=int)
+            if b_arr is not None and A_arr is not None:
+                if not np.array_equal((A_arr @ bits) % 2, b_arr % 2):
+                    continue
+            ok = True
+            for Qi, ci in zip(Q_list, c_arr):
+                if (bits @ Qi @ bits) % 2 != ci % 2:
+                    ok = False; break
+            if ok:
+                count += 1
+        return count
+
+    def find_witness_solution(self,
+                               A=None,
+                               b=None,
+                               Q=None,
+                               c=None,
+                               modulus: int = 2) -> Optional[int]:
+        """Find one assignment satisfying the constraint set, returned as
+        an integer with MSB-first bit convention (bit 0 = MSB). Returns
+        None if no solution exists.
+
+        For T0 (GF(2)-affine), uses Gaussian elimination to find a witness
+        in poly time. For T1 (with quadratic constraints), brute-forces
+        at small n. Honest-stops via NotInFamily for mod-p != 2."""
+        cls = self.classify_constraints(A=A, b=b, Q=Q, c=c, modulus=modulus)
+        if not cls.in_family:
+            raise NotInFamily(cls)
+        A_arr = _as_array(A) if A is not None else None
+        b_arr = _as_array(b) if b is not None else None
+        n = int(A_arr.shape[1]) if (A_arr is not None and A_arr.size) else 0
+        if n == 0:
+            return 0 if (Q is None or not Q) else None
+        if Q is None or not Q:
+            # T0: Gaussian elimination in poly time.
+            x = _gf2_solve_one(A_arr, b_arr)
+            if x is None:
+                return None
+            return _bits_to_int(x)
+        # T1: brute force at small n.
+        if n > 24:
+            raise ValueError(
+                f"find_witness_solution: n = {n} too large for brute-force quadratic search."
+            )
+        Q_list = [_as_array(Qi) for Qi in Q]
+        c_arr = _as_array(c) if c is not None else np.zeros(len(Q_list), dtype=int)
+        for x in range(2 ** n):
+            bits = np.array([(x >> (n - 1 - i)) & 1 for i in range(n)], dtype=int)
+            if b_arr is not None and A_arr is not None:
+                if not np.array_equal((A_arr @ bits) % 2, b_arr % 2):
+                    continue
+            if all((bits @ Qi @ bits) % 2 == ci % 2 for Qi, ci in zip(Q_list, c_arr)):
+                return x
+        return None
+
+    def list_solutions(self,
+                        A=None,
+                        b=None,
+                        Q=None,
+                        c=None,
+                        modulus: int = 2) -> List[int]:
+        """All assignments satisfying the constraint set. Brute-force
+        enumeration at small n (cap n <= 20; raises ValueError above)."""
+        cls = self.classify_constraints(A=A, b=b, Q=Q, c=c, modulus=modulus)
+        if not cls.in_family:
+            raise NotInFamily(cls)
+        A_arr = _as_array(A) if A is not None else None
+        b_arr = _as_array(b) if b is not None else None
+        Q_list = [_as_array(Qi) for Qi in Q] if Q else []
+        c_arr = _as_array(c) if c is not None else np.zeros(len(Q_list), dtype=int)
+        n = int(A_arr.shape[1]) if (A_arr is not None and A_arr.size) else 0
+        if n > 20:
+            raise ValueError(
+                f"list_solutions: n = {n} too large for full enumeration "
+                f"(cap = 20). Use count_solutions or find_witness_solution instead."
+            )
+        out = []
+        for x in range(2 ** n):
+            bits = np.array([(x >> (n - 1 - i)) & 1 for i in range(n)], dtype=int)
+            if b_arr is not None and A_arr is not None:
+                if not np.array_equal((A_arr @ bits) % 2, b_arr % 2):
+                    continue
+            if all((bits @ Qi @ bits) % 2 == ci % 2 for Qi, ci in zip(Q_list, c_arr)):
+                out.append(x)
+        return out
+
+    # -- signatures ---------------------------------------------------------
+
+    def classify_function(self, values: Sequence) -> Classification:
+        """Classify a symmetric signature given as a sequence of values
+        indexed by Hamming weight 0..arity. Arity is derived from len(values)."""
+        cls = classify_signature(list(values))
+        self._last_classification = cls
+        return cls
+
+    def matchgate_rank(self, values: Sequence) -> int:
+        """Basis-aware matchgate rank of a symmetric signature. Always in
+        {0, 1, 2} for symmetric signatures (the publicly-original result;
+        if this ever returns >2 for a symmetric input, the theorem has
+        been refuted or holant-tools has a bug)."""
+        cls = self.classify_function(values)
+        rank = int(cls.meters.get("basis_aware_rank", -1))
+        if rank < 0:
+            raise RuntimeError(f"classify_signature did not emit basis_aware_rank meter: {cls.meters}")
+        return rank
+
+    def is_matchgate_realisable(self, values: Sequence) -> bool:
+        """True iff the symmetric signature is matchgate-realisable in
+        some basis (basis-aware rank >= 1)."""
+        return self.matchgate_rank(values) >= 1
 
     # -- audit (everything at once) -----------------------------------------
 
