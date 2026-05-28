@@ -162,18 +162,112 @@ def test_crossing_elimination_trivial_no_crossings():
     assert result.inverse(42) == 42
 
 
-def test_crossing_elimination_with_crossings_is_v02():
-    """CrossingElimination with non-empty crossings raises NotImplementedError
-    pending the v0.2 Cai-Lu-Xia gadget construction."""
-    r = CrossingElimination(crossings=[((0, 1), (2, 3))])
-    with pytest.raises(NotImplementedError):
-        r.apply({"vertices": [0, 1, 2, 3], "edges": [(0, 1), (2, 3)]})
+def test_crossing_elimination_inserts_cai_gorenstein_gadget():
+    """A declared crossing is replaced by the 6-vertex/7-edge
+    Cai-Gorenstein gadget: 4 fresh pin vertices + 2 fresh internal
+    vertices + 4 segment edges + 7 gadget internal edges (one with
+    weight -1 on the spine)."""
+    graph = {
+        "vertices": [0, 1, 2, 3],
+        "edges": [(0, 1), (1, 2), (2, 3), (3, 0), (0, 2), (1, 3)],
+        "weights": {e: 1 for e in [(0, 1), (1, 2), (2, 3), (3, 0), (0, 2), (1, 3)]},
+    }
+    r = CrossingElimination(crossings=[((0, 2), (1, 3))])
+    result = r.apply(graph)
+    # Vertex count: 4 original + 6 fresh = 10
+    assert len(result.problem["vertices"]) == 10
+    # Edge count: 6 original - 2 deleted + 4 segments + 7 gadget = 15
+    assert len(result.problem["edges"]) == 15
+    # Exactly one edge carries the -1 weight (the gadget spine).
+    minus_one_weights = [w for w in result.problem["weights"].values() if w == -1]
+    assert len(minus_one_weights) == 1
 
 
-def test_high_degree_vertex_split_is_a_v02_sketch():
-    r = HighDegreeVertexSplit()
-    with pytest.raises(NotImplementedError):
-        r.apply({"vertices": [], "edges": []})
+def test_crossing_elimination_preserves_unit_weight_k4_pm_count():
+    """K_4 (3 unit-weight perfect matchings) has the property that the
+    gadget-inserted -1 signs cancel out across all matchings, so the
+    planarised K_4 has PerfMatch = 3 too. This is a useful sanity
+    test (NOT a general property -- see the class docstring on what
+    the gadget actually preserves)."""
+    graph = {
+        "vertices": [0, 1, 2, 3],
+        "edges": [(0, 1), (1, 2), (2, 3), (3, 0), (0, 2), (1, 3)],
+        "weights": {e: 1 for e in [(0, 1), (1, 2), (2, 3), (3, 0), (0, 2), (1, 3)]},
+    }
+    original = brute_force_count_matchings(graph["vertices"], graph["edges"])
+    assert original == 3
+    r = CrossingElimination(crossings=[((0, 2), (1, 3))])
+    result = r.apply(graph)
+    from structural_computing import brute_force_weighted_matching_sum
+    planarised = brute_force_weighted_matching_sum(
+        result.problem["vertices"],
+        result.problem["edges"],
+        result.problem["weights"],
+    )
+    assert planarised == 3
+
+
+def test_crossing_elimination_rejects_undeclared_edge():
+    """A crossing whose edges aren't in the graph raises ReductionNotApplicable."""
+    r = CrossingElimination(crossings=[((99, 100), (101, 102))])
+    with pytest.raises(ReductionNotApplicable):
+        r.apply({"vertices": [0, 1], "edges": [(0, 1)]})
+
+
+def test_high_degree_vertex_split_realises_geometric_signature():
+    """An even-arity-4 symmetric matchgate-realisable signature
+    [2, 0, 6, 0, 18] (ratio 3) gets realised by the 2k=8-node
+    triangle-cycle matchgate. Every signature entry Γ^α matches the
+    brute-force PerfMatch of the matchgate with the α-indicated
+    externals removed."""
+    from itertools import product as iproduct
+    from structural_computing import brute_force_weighted_matching_sum
+
+    sig = [2, 0, 6, 0, 18]
+    h = HighDegreeVertexSplit(signature=sig)
+    result = h.apply({"values": sig})
+    mg = result.problem
+    assert mg["arity"] == 4
+    assert len(mg["vertices"]) == 8                  # 2k = 2*4 = 8
+    assert len(mg["externals"]) == 4
+    # Verify each of the 16 entries of the signature.
+    for alpha in iproduct([0, 1], repeat=4):
+        drop = [mg["externals"][i] for i, b in enumerate(alpha) if b == 1]
+        vert = [v for v in mg["vertices"] if v not in drop]
+        eds  = [e for e in mg["edges"] if e[0] not in drop and e[1] not in drop]
+        pm = brute_force_weighted_matching_sum(
+            vert, eds, {e: mg["weights"][e] for e in eds},
+        )
+        hw = sum(alpha)
+        expected = sig[hw]
+        assert abs(pm - expected) < 1e-9, (
+            f"alpha={alpha} (hw={hw}): brute force {pm} != expected {expected}"
+        )
+
+
+def test_high_degree_vertex_split_rejects_non_geometric_signature():
+    """[1, 0, 1, 0, 2] does not satisfy the geometric-progression
+    invariant (z_2/z_0=1 but z_4/z_2=2), so it's NOT matchgate-realisable
+    and the reduction must refuse."""
+    h = HighDegreeVertexSplit(signature=[1, 0, 1, 0, 2])
+    with pytest.raises(ReductionNotApplicable):
+        h.apply({"values": [1, 0, 1, 0, 2]})
+
+
+def test_high_degree_vertex_split_rejects_non_alternate_zero():
+    """A signature with non-zero entries at both even and odd indices
+    is not matchgate-realisable."""
+    h = HighDegreeVertexSplit(signature=[1, 1, 1, 0, 0])
+    with pytest.raises(ReductionNotApplicable):
+        h.apply({"values": [1, 1, 1, 0, 0]})
+
+
+def test_high_degree_vertex_split_no_signature_supplied_does_not_apply():
+    """Without a signature argument, the reduction does not apply."""
+    h = HighDegreeVertexSplit()
+    assert h.applies_to({"values": [1, 0, 1]}) is False
+    with pytest.raises(ReductionNotApplicable):
+        h.apply({"values": [1, 0, 1]})
 
 
 def test_rationalise_weights_real_to_integer():

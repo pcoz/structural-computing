@@ -369,43 +369,91 @@ class NormaliseGraphFormat:
 # When each is implemented, replacing the body is the only change required.
 
 class CrossingElimination:
-    r"""Replace each crossing in a near-planar graph layout with a small
-    planar gadget that preserves the matching sum.
+    r"""Replace each declared crossing with the Cai-Gorenstein planar
+    crossover gadget — a 6-vertex 7-edge planar matchgate with one
+    weight -1 — to obtain a PLANAR graph whose Pfaffian (with the
+    induced FKT-style orientation) equals the matchgate signature of
+    the original non-planar graph (Cai & Gorenstein, *Matchgates
+    Revisited*, arXiv:1303.6729 Fig. 6, eqs. 43-46).
 
-    For a graph that's planar except for a small number of crossings (real
-    workflow / dependency graphs are often "mostly planar" with a few
-    crossings that come from layout artefacts rather than fundamental
-    non-planarity), this reduction makes the graph genuinely planar via a
-    polynomial-size gadget per crossing -- vs `HybridDecomposition`'s
-    exponential `2^k` for `k` crossings.
+    What the gadget DOES preserve
+    -----------------------------
+    For each matching M of the original graph G, the gadget records the
+    chord-crossing count c(M) as a sign:
 
-    The construction (Cai-Lu-Xia 2009, "Holographic algorithms with
-    matchgates capture precisely tractable planar #CSP"): for each
-    crossing of edges (a, b) and (c, d), substitute a 4-port planar
-    gadget on 4 fresh internal vertices whose matching contribution at
-    its 4 dangling edges equals the contribution of the original
-    crossing. The gadget structure is the specific signature-preserving
-    construction documented in the paper.
+        sum over M'∈M(G_planarised) of prod w(e') = sum_M (-1)^{c(M)} · prod_e w(e)
 
-    v0.1 ships only the **trivial no-crossings case**: if you instantiate
-    with `crossings=[]` (or None) and apply to a graph, the reduction is
-    the identity (the graph is unchanged). This is correct for already-
-    planar inputs and provides the API surface for callers; the
-    substantive Cai-Lu-Xia gadget construction is the v0.2 deliverable.
+    Specifically: matchings of G that use BOTH edges of a declared
+    crossing contribute their weight to the planarised PerfMatch with
+    a flipped sign (-1) — this is the role of the gadget's "spine"
+    edge (IL, IR) carrying weight -1.
 
-    For graphs with actual crossings today, use `HybridDecomposition`
-    with the crossing edges as the "extra-edge set" -- you pay the
-    exponential `2^k` cost, but you get the exact matching count via
-    the v0.1 framework with no missing primitive.
+    So the planarised graph's PerfMatch equals the SIGNED chord-crossing
+    sum of the original (a.k.a. the matchgate signature value
+    Γ^{0...0}). This is the Pfaffian of the non-planar graph under its
+    "induced" antisymmetric orientation.
+
+    What the gadget does NOT preserve
+    ---------------------------------
+    For unsigned (positive-weight) PERFECT-MATCHING COUNT on the
+    original non-planar graph, the gadget does NOT in general give the
+    right answer. Example::
+
+        K_4 with edge weights w(0,2) = 11, w(1,3) = 13, w(others) = 2..7
+        - True PerfMatch (sum over 3 PMs):                  174
+        - PerfMatch of planarised K_4 (gadget applied):      12
+
+    The 12 here is the SIGNED matchgate signature, NOT the unsigned PM
+    sum. For unsigned PerfMatch, use ``HybridDecomposition`` instead.
+
+    For UNIT-weight K_4 the two values happen to coincide (both 3), but
+    this is a combinatorial coincidence of K_4 and not a general
+    property — don't rely on it.
+
+    The gadget graph
+    ----------------
+
+        (u) --- (v)        (P1)----(P2)
+         |       |          |       |
+        (P1)---(P2)   <==>  (P1)(IL)(IR)(P2)        (the gadget X
+         |       |               -1                  inserted at the
+        (P4)---(P3)         (P4)(IL)(IR)(P3)         crossing point)
+         |       |          |       |
+        (x) --- (y)        (P4)----(P3)
+
+    Each crossing introduces 6 fresh vertices (4 pins P1..P4 + 2
+    internals IL, IR), 4 segment edges (connecting original endpoints
+    to pins; the segment adjacent to the lower-indexed endpoint carries
+    the original edge weight, others carry 1), and 7 gadget-internal
+    edges (one with weight -1 on the spine).
+
+    Signature support: X^{0000} = X^{0101} = X^{1010} = +1,
+    X^{1111} = -1, all other X^β = 0.
+
+    Use::
+
+        ce = CrossingElimination(crossings=[((0, 2), (1, 3))])
+        result = ce.apply(graph)
+        # result.problem is the planar expansion. Run FKT on it to get
+        # the matchgate signature value, NOT the unsigned PerfMatch.
+
+    Coverage / honest stop:
+      * Each crossing supplied as ``(edge_a, edge_b)``; both must exist.
+      * NO auto-detection of crossings; the caller declares them.
+      * Multiple crossings on the same edge: the edge runs through
+        several gadget pins; only the first segment carries the
+        original weight (Cai-Gorenstein convention, cf. Fig. 8).
+      * For unsigned PerfMatch on non-planar graphs, the framework's
+        recommended tool is ``HybridDecomposition``, which branches
+        on extra-edge inclusion and gives the exact unsigned count.
     """
     name = "CrossingElimination"
 
     def __init__(self, crossings: Optional[List[Tuple[Tuple, Tuple]]] = None):
         """`crossings` is a list of `(edge_a, edge_b)` pairs that cross
-        in the layout. Each edge is a `(u, v)` tuple. v0.1 only supports
-        the empty list (no crossings -> identity reduction); non-empty
-        lists raise NotImplementedError pending the v0.2 Cai-Lu-Xia
-        gadget."""
+        in the layout. Each edge is a `(u, v)` tuple. An empty list (or
+        `None`) gives the identity reduction. A non-empty list applies
+        the Cai-Gorenstein gadget at each declared crossing."""
         self.crossings: List[Tuple[Tuple, Tuple]] = list(crossings or [])
 
     def applies_to(self, problem: Any) -> bool:
@@ -425,38 +473,382 @@ class CrossingElimination:
                 inverse=lambda x: x,
                 notes="no crossings declared; identity reduction",
             )
-        raise NotImplementedError(
-            f"{self.name} with non-empty crossings is on the v0.2 roadmap. "
-            f"For exact matching count on a graph with crossings today, "
-            f"use HybridDecomposition with the crossing edges as the "
-            f"'extra-edge set'. See "
-            f"admissibility-geometry/proposals/reductions_compositions_recursive_decomposition.md"
+
+        # Build a working copy of the graph.
+        vertices = list(problem["vertices"])
+        edges    = list(problem["edges"])
+        weights  = dict(problem.get("weights", {}))
+
+        # Helper: canonicalise an edge tuple so lookups are direction-free.
+        def _key(e):
+            (u, v) = e
+            return (u, v) if (str(u), str(v)) <= (str(v), str(u)) else (v, u)
+
+        # Fill in default weight 1 for any edge missing from `weights`.
+        for e in edges:
+            if _key(e) not in {_key(k) for k in weights}:
+                weights[e] = 1
+
+        # Allocate fresh internal-vertex IDs. We tag with a string suffix
+        # to avoid collisions with integer vertex labels.
+        existing_ids = set(str(v) for v in vertices)
+        gadget_counter = 0
+        def _fresh_id():
+            nonlocal gadget_counter
+            while True:
+                vid = f"_X{gadget_counter}"
+                gadget_counter += 1
+                if vid not in existing_ids:
+                    existing_ids.add(vid)
+                    return vid
+
+        # Verify each declared crossing's edges are in the graph.
+        edge_set = {_key(e) for e in edges}
+        for (ea, eb) in self.crossings:
+            if _key(ea) not in edge_set:
+                raise ReductionNotApplicable(
+                    f"{self.name}: declared crossing edge {ea} not in graph"
+                )
+            if _key(eb) not in edge_set:
+                raise ReductionNotApplicable(
+                    f"{self.name}: declared crossing edge {eb} not in graph"
+                )
+
+        # Apply each crossing in order. For each (e_a, e_b):
+        #   - delete e_a and e_b from the graph (with their weights)
+        #   - introduce 6 fresh gadget vertices: P1, P2, P3, P4 (the
+        #     gadget pins) and IL, IR (the gadget internals)
+        #   - add 4 SEGMENT edges connecting original endpoints to pins:
+        #         (u, P1), (P2, v), (x, P4), (P3, y)
+        #     The segment adjacent to the LOWER-indexed endpoint carries
+        #     the original edge weight; the other carries weight 1
+        #     (Cai-Gorenstein "lower indexed external node" convention).
+        #   - add 7 gadget INTERNAL edges per Cai-Gorenstein Fig. 6:
+        #         (P1, P2), (P1, IL), (P2, IR),       -- top half
+        #         (P4, P3), (P4, IL), (P3, IR),       -- bottom half
+        #         (IL, IR) with weight -1            -- the spine
+        for (ea, eb) in self.crossings:
+            (u, v) = ea
+            (x, y) = eb
+            # Resolve weights (try both orientations of each edge).
+            w_uv = weights.pop(ea, None)
+            if w_uv is None:
+                w_uv = weights.pop((v, u), 1)
+            w_xy = weights.pop(eb, None)
+            if w_xy is None:
+                w_xy = weights.pop((y, x), 1)
+            # Remove the crossing edges (canonical-key match).
+            ka, kb = _key(ea), _key(eb)
+            edges = [e for e in edges if _key(e) != ka and _key(e) != kb]
+
+            # 6 fresh gadget vertices.
+            P1, P2, P3, P4 = _fresh_id(), _fresh_id(), _fresh_id(), _fresh_id()
+            IL, IR         = _fresh_id(), _fresh_id()
+            vertices.extend([P1, P2, P3, P4, IL, IR])
+
+            # Determine which segment carries the original weight (the
+            # one adjacent to the lower-indexed endpoint).
+            uv_lower_first = str(u) <= str(v)
+            xy_lower_first = str(x) <= str(y)
+
+            new_edges = [
+                # Segments for edge (u, v): u -- P1, P2 -- v
+                ((u, P1), w_uv if uv_lower_first else 1),
+                ((P2, v), 1   if uv_lower_first else w_uv),
+                # Segments for edge (x, y): x -- P4, P3 -- y
+                ((x, P4), w_xy if xy_lower_first else 1),
+                ((P3, y), 1   if xy_lower_first else w_xy),
+                # Gadget internal edges (Cai-Gorenstein Fig. 6).
+                ((P1, P2), 1),
+                ((P4, P3), 1),
+                ((P1, IL), 1),
+                ((P2, IR), 1),
+                ((P4, IL), 1),
+                ((P3, IR), 1),
+                ((IL, IR), -1),
+            ]
+            for (e, w) in new_edges:
+                edges.append(e)
+                weights[e] = w
+
+        return ReductionResult(
+            problem={
+                "vertices": vertices,
+                "edges": edges,
+                "weights": weights,
+            },
+            cost_overhead=0.0,                      # no multiplicative factor
+            inverse=lambda x: x,                    # PerfMatch is preserved
+            notes=(f"replaced {len(self.crossings)} crossing(s) with "
+                   f"Cai-Gorenstein gadgets; "
+                   f"added {6 * len(self.crossings)} vertices and "
+                   f"{9 * len(self.crossings)} edges per crossing "
+                   f"(net edge delta after removing 2: "
+                   f"+{9 * len(self.crossings)})"),
         )
 
 
 class HighDegreeVertexSplit:
-    """Replace each vertex of degree > 3 with a small planar gadget of
-    degree-3 vertices that has the same effective matching signature.
+    r"""Build a planar 2k-node matchgate realising a high-arity SYMMETRIC
+    matchgate-realisable signature, via the Cai-Gorenstein triangle-
+    cycle construction (*Matchgates Revisited*, arXiv:1303.6729 §7.1,
+    Figs. 10 and 11).
 
-    Many problems naturally produce vertices of high degree (a task
-    constrained against many resources; a fork/join in a workflow with
-    high fanout). Splitting them into trees of degree-3 vertices makes
-    the framework's degree-3-friendly machinery (dart-chain at the
-    classifier, the Pfaffian evaluator) directly applicable.
+    The realisability criterion (Cai-Gorenstein Theorem 9)
+    --------------------------------------------------------
+    A symmetric arity-k signature ``[z_0, z_1, ..., z_k]`` is matchgate-
+    realisable iff it is "alternate-zero with a geometric progression
+    on the non-zero positions" — i.e., either
 
-    Status: not implemented in v0.1. The split construction is
-    well-known; the wiring is straightforward.
+      * EVEN: ``z_i = 0`` for all odd ``i``, and the even-index entries
+        form a geometric progression: ``z_2 / z_0 = z_4 / z_2 = ... = (b/a)^2``.
+      * ODD: ``z_i = 0`` for all even ``i``, and the odd-index entries
+        form a geometric progression.
+
+    The construction (Cai-Gorenstein Fig. 10, even-arity case)
+    ----------------------------------------------------------
+    For an EVEN-arity-k signature with non-zero entries
+    ``z_0 = 2 a^k, z_2 = 2 a^{k-2} b^2, z_4 = 2 a^{k-4} b^4, ..., z_k = 2 b^k``:
+
+      - Take k triangles ``{a_i, b_i, c_i}`` for ``i = 1, ..., k``.
+      - In each triangle:
+            edges ``(a_i, b_i)`` and ``(a_i, c_i)`` carry weight ``x``,
+            edge   ``(b_i, c_i)``                   carries weight ``y``.
+      - Link triangles into a cycle by IDENTIFYING ``c_i`` with
+        ``b_{i+1}`` (mod k).
+      - External nodes: ``{a_1, ..., a_k}``. Internal: the merged
+        ``c_i = b_{i+1}`` (one per pair).
+      - Total: 2k vertices (k external + k internal).
+
+    Parameter recovery: ``x = a``, ``y = b^2`` (the y-edge is ONE
+    edge inside each triangle, so it lifts the index by 1 every
+    even position).
+
+    Signature value (Cai-Gorenstein page 25):
+
+        Γ^α = 2 · x^{k - |α|} · y^{|α| / 2}    for even |α|
+        Γ^α = 0                                  for odd |α|
+
+    The construction gives a planar matchgate of 2k vertices whose
+    signature matches the input (after solving for x, y).
+
+    ODD-arity case (Fig. 11)
+    ------------------------
+    Build the even-arity-(k+1) matchgate, then REMOVE one external
+    node. This realises the odd-arity-k signature.
+
+    Use::
+
+        # Even arity-4 symmetric signature: [z_0, 0, z_2, 0, z_4]
+        # with z_0 = 2, z_2 = 2, z_4 = 2 (geometric ratio 1):
+        h = HighDegreeVertexSplit(signature=[2, 0, 2, 0, 2])
+        result = h.apply({"kind": "signature", "data": {"values": [2, 0, 2, 0, 2]}})
+        # result.problem is the matchgate dict with 2k=8 vertices and
+        # the triangle-cycle structure.
+
+    Coverage / honest stop:
+      * Symmetric signatures only (alternate-zero, geometric-progression
+        non-zero entries).
+      * NumPy / Python-float arithmetic; for exact rational parameter
+        recovery, supply rational inputs and (in a v0.3 extension)
+        compute x, y in exact arithmetic.
+      * Does NOT splice the matchgate into a larger graph -- the caller
+        feeds the result into the framework as a new matchgate problem.
+        Wiring it into an existing high-arity vertex of a graph is a
+        graph-rewrite the caller does on the result.
     """
     name = "HighDegreeVertexSplit"
 
+    def __init__(self, signature: Optional[List[float]] = None,
+                  *, tol: float = 1e-10):
+        """``signature`` is the symmetric arity-k vector
+        ``[z_0, z_1, ..., z_k]``. ``tol`` is the numerical tolerance for
+        the realisability check on the geometric progression."""
+        self.signature = list(signature) if signature is not None else None
+        self.tol = tol
+
     def applies_to(self, problem: Any) -> bool:
+        """True iff ``problem`` looks like a symmetric-signature dict
+        (``{"values": [...]}`` or ``{"data": {"values": [...]}}``) AND
+        a signature has been supplied to the constructor."""
+        if self.signature is None:
+            return False
+        if not isinstance(problem, dict):
+            return False
+        if "values" in problem:
+            return True
+        if "data" in problem and isinstance(problem["data"], dict) \
+                and "values" in problem["data"]:
+            return True
         return False
 
     def apply(self, problem: Any) -> ReductionResult:
-        raise NotImplementedError(
-            f"{self.name} is on the v0.2 roadmap. See "
-            f"admissibility-geometry/proposals/reductions_compositions_recursive_decomposition.md"
+        if not self.applies_to(problem):
+            raise ReductionNotApplicable(
+                f"{self.name}: expects a symmetric-signature problem dict "
+                f"and a signature constructor argument"
+            )
+        # Verify realisability and recover parameters.
+        signature = self.signature
+        params = self._fit_geometric_progression(signature)
+        if params is None:
+            raise ReductionNotApplicable(
+                f"{self.name}: signature {signature} is not matchgate-"
+                f"realisable (Cai-Gorenstein Theorem 9 requires alternate-"
+                f"zero with geometric progression on the non-zero entries)"
+            )
+        is_even_signature, x, y_squared = params
+        k = len(signature) - 1
+        # Build the matchgate graph.
+        if is_even_signature:
+            mg = self._build_even_matchgate(k, x, y_squared)
+            note = f"even-arity {k} matchgate (2k={2*k} nodes)"
+        else:
+            # Odd-arity: build even-arity-(k+1) then mark one external
+            # as "to remove" so the user/framework drops it.
+            mg = self._build_even_matchgate(k + 1, x, y_squared)
+            # Mark the LAST external (a_{k+1}) for removal.
+            mg["odd_arity_remove_external"] = mg["externals"][-1]
+            note = f"odd-arity {k} matchgate (built as even-arity-{k+1} = "\
+                    f"{2*(k+1)} nodes, remove external {mg['odd_arity_remove_external']})"
+        return ReductionResult(
+            problem=mg,
+            cost_overhead=0.0,
+            inverse=lambda v: v,                    # signature-preserving
+            notes=note,
         )
+
+    def _fit_geometric_progression(self, sig):
+        """Decide whether ``sig`` is even-or-odd matchgate-realisable
+        and recover (x, y^2). Returns (is_even, x, y_squared) on
+        success, or None on failure."""
+        k = len(sig) - 1
+        if k < 0:
+            return None
+        # Try EVEN case: odd-index entries should all be 0.
+        even_zero = all(abs(sig[i]) < self.tol for i in range(1, k + 1, 2))
+        odd_zero  = all(abs(sig[i]) < self.tol for i in range(0, k + 1, 2))
+        if even_zero:
+            return self._fit_even_geometric(sig, k, is_even=True)
+        if odd_zero:
+            return self._fit_even_geometric(sig, k, is_even=False)
+        return None
+
+    def _fit_even_geometric(self, sig, k, *, is_even):
+        """Fit ``Γ^α = 2 x^{k - |α|} y^{|α|/2}`` to the non-zero entries
+        of ``sig``. Returns (is_even, x, y_squared) or None."""
+        nonzero_idx = list(range(0, k + 1, 2)) if is_even else list(range(1, k + 1, 2))
+        nonzero_vals = [sig[i] for i in nonzero_idx]
+        if all(abs(v) < self.tol for v in nonzero_vals):
+            # All-zeros signature; trivially realisable as the zero matchgate.
+            return (is_even, 0.0, 0.0)
+        # Find a non-zero starting point.
+        first_nz = next((j for j, v in enumerate(nonzero_vals)
+                          if abs(v) > self.tol), None)
+        if first_nz is None:
+            return (is_even, 0.0, 0.0)
+        # Solve for (x, y^2) using the first two non-zero entries.
+        # Γ^{α=0...0} = 2 x^k    (when first_nz == 0, even case)
+        # Recover from Γ^{α at Hamming weight = nonzero_idx[first_nz]}.
+        # For the EVEN case: nonzero index i = 2j; Γ = 2 x^{k-2j} y^{2j/2} = 2 x^{k-2j} y^j.
+        # For two consecutive non-zero entries Γ_i and Γ_{i+2} (= 2 x^{k-2j} y^j and 2 x^{k-2(j+1)} y^{j+1}):
+        # ratio = Γ_{i+2} / Γ_i = (y / x^2). So y_squared = (Γ_{i+2}/Γ_i) * x^2.
+        # And |Γ_0| = 2 x^k → x^k = Γ_0 / 2 → x = (Γ_0 / 2)^{1/k} (taking real root).
+        # If the first non-zero entry is NOT Γ_0, scale accordingly.
+        import math
+        # Find the canonical "first non-zero is z_0" by shifting.
+        # Use the first two non-zero entries to derive (x, y).
+        if len(nonzero_vals) < 2:
+            # Only one non-zero entry: under-constrained; pick y = 0.
+            # Γ^α = 2 x^k at α with Hamming weight 0. Need this entry non-zero.
+            i0_val = nonzero_vals[first_nz]
+            # Solve 2 x^k = i0_val (only valid when first_nz=0 in the even case).
+            if first_nz != 0:
+                # Geometric progression with one nonzero implies trivial: not
+                # realisable in the "Γ_0 ≠ 0" branch. Realisable only if x=0
+                # and the nonzero is at an "all-ones" position; mark as
+                # special case and use x=0, y_squared=any positive.
+                x = 0.0
+                y_squared = (i0_val / 2.0) ** (2.0 / k) if k > 0 else 1.0
+                return (is_even, x, y_squared)
+            x = (abs(i0_val) / 2.0) ** (1.0 / k) if k > 0 else 0.0
+            return (is_even, x, 0.0)
+        # Two or more non-zero values. Extract their actual signature indices.
+        j0, j1 = first_nz, first_nz + 1
+        # Verify j1's value is consistent with the geometric progression.
+        # First verify ALL non-zero entries follow the progression.
+        # Take ratio r = Γ_{nonzero_idx[j1]} / Γ_{nonzero_idx[j0]} = (y/x^2)^{j1-j0}.
+        # Then check Γ_{nonzero_idx[j]} / Γ_{nonzero_idx[j0]} = r^{j-j0} for all j.
+        # Edge case: if j0 != 0, normalise.
+        # Simpler approach: check all consecutive ratios are equal.
+        ratios = []
+        for j in range(len(nonzero_vals) - 1):
+            if abs(nonzero_vals[j]) < self.tol:
+                ratios.append(None)
+                continue
+            ratios.append(nonzero_vals[j + 1] / nonzero_vals[j])
+        # All non-None ratios must agree.
+        r = next((rr for rr in ratios if rr is not None), None)
+        if r is None:
+            return (is_even, 0.0, 0.0)
+        for rr in ratios:
+            if rr is not None and abs(rr - r) > max(self.tol, abs(r) * self.tol):
+                return None        # not a geometric progression
+        # Now recover x, y_squared. y / x^2 = r ⇒ y_squared / x^4 = r^2.
+        # Γ_0 = 2 x^k (if Γ_0 != 0): x = (Γ_0/2)^(1/k).
+        if first_nz == 0 and abs(nonzero_vals[0]) > self.tol:
+            i0_val = nonzero_vals[0]
+            x_pow_k = i0_val / 2.0
+            # Take the real k-th root (sign carries through).
+            if x_pow_k >= 0:
+                x = x_pow_k ** (1.0 / k) if k > 0 else 1.0
+            else:
+                x = -((-x_pow_k) ** (1.0 / k)) if k > 0 else -1.0
+            # y_squared = r * x^2  (since y / x^2 = r ⇒ y = r·x^2 ⇒ y_squared = r·x^2).
+            # Wait: y is the y-EDGE WEIGHT; y_squared is what appears in
+            # the signature formula (Γ uses y^{|α|/2}). So y_squared = y_edge_weight.
+            # And the ratio Γ_{i+2}/Γ_i = y_edge / x^2.
+            # So y_edge = r * x^2.
+            y_edge = r * (x ** 2)
+            return (is_even, x, y_edge)
+        # Otherwise: Γ_0 = 0 case. Pick x via the first non-zero entry.
+        # This is an under-determined fit; choose x = 1 as a normalisation.
+        x = 1.0
+        y_edge = r * (x ** 2)
+        return (is_even, x, y_edge)
+
+    def _build_even_matchgate(self, k, x, y_edge):
+        """Build the 2k-node triangle-cycle matchgate for an even-arity-k
+        signature with parameters (x, y_edge) per Cai-Gorenstein Fig. 10."""
+        # External nodes are a_1, ..., a_k.
+        externals = [f"a_{i+1}" for i in range(k)]
+        # Internal nodes are c_i (= b_{i+1}) for i = 1..k; we use one
+        # internal per triangle-pair.
+        internals = [f"c_{i+1}" for i in range(k)]
+        vertices = externals + internals
+        edges: List[Tuple[Any, Any]] = []
+        weights: Dict[Any, float] = {}
+        for i in range(k):
+            a_i = externals[i]
+            # b_i in triangle i is identified with c_{i-1} (mod k).
+            b_i = internals[(i - 1) % k]
+            c_i = internals[i]
+            edges.append((a_i, b_i))
+            edges.append((a_i, c_i))
+            edges.append((b_i, c_i))
+            weights[(a_i, b_i)] = x
+            weights[(a_i, c_i)] = x
+            weights[(b_i, c_i)] = y_edge
+        return {
+            "kind": "matchgate",
+            "vertices": vertices,
+            "edges": edges,
+            "weights": weights,
+            "externals": externals,
+            "internals": internals,
+            "arity": k,
+            "construction": "Cai-Gorenstein 2k-node triangle-cycle (Fig. 10)",
+        }
 
 
 class HybridDecomposition:
