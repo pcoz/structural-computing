@@ -68,6 +68,9 @@ def test_public_api_complete():
         "LeafEvaluator", "DEFAULT_LEAF_REGISTRY",
         # Auto-detection
         "auto_detect_extras",
+        # Calibration (optional, data from structural-computing-bench)
+        "apply_calibration", "clear_calibration", "get_calibration",
+        "has_calibration_for", "predict_seconds",
     }
     actual = set(structural_computing.__all__) - {"__version__"}
     assert actual == expected, f"differences: {actual ^ expected}"

@@ -6,6 +6,27 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 once it reaches v1.0.0; until then, the v0.x API may shift between minor
 versions.
 
+## [Unreleased] — calibration loader
+
+### Calibration (structural_computing/calibration.py)
+- New optional module for loading cost-model calibration data produced
+  by the companion repo `structural-computing-bench`. Exposes
+  `apply_calibration`, `clear_calibration`, `get_calibration`,
+  `has_calibration_for`, `predict_seconds`.
+- The router does NOT consume this data directly yet (a v0.3
+  deliverable wires the predictions into route selection); for now the
+  data is available for diagnostic / planning use via
+  `predict_seconds(tier, question, n=...)`.
+- Calibration data structure matches the bench repo's render output:
+  `{(tier, question): {"model": "power_law"|"exponential", "params": (a, b), "rms": float}}`.
+
+### Companion repo: structural-computing-bench
+- New separate repository for the benchmarking machinery
+  (timing primitives, curve fitters, problem generators, calibration
+  runner CLI, orchestrator-trace analytics). Lives separately to keep
+  the core library free of timing / measurement deps.
+- See https://github.com/pcoz/structural-computing-bench (TBC).
+
 ## [0.2.0a1] — 2026-05-28 (v0.2 alpha — reductions layer)
 
 **v0.2 closes the v0.1 NotImplementedError gaps** with real

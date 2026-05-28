@@ -91,6 +91,13 @@ from .orchestrator import (
     DEFAULT_LEAF_REGISTRY,
 )
 from .transform import auto_detect_extras
+from .calibration import (
+    apply_calibration,
+    clear_calibration,
+    get_calibration,
+    has_calibration_for,
+    predict_seconds,
+)
 
 __all__ = [
     # Wrapper class (the main entry point)
@@ -160,6 +167,12 @@ __all__ = [
     "DEFAULT_LEAF_REGISTRY",
     # Auto-detection helper for HybridDecomposition
     "auto_detect_extras",
+    # Optional cost-model calibration (data produced by structural-computing-bench)
+    "apply_calibration",
+    "clear_calibration",
+    "get_calibration",
+    "has_calibration_for",
+    "predict_seconds",
     # Version
     "__version__",
 ]
