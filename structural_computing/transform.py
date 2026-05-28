@@ -284,28 +284,140 @@ class HighDegreeVertexSplit:
 
 
 class HybridDecomposition:
-    """Split a mostly-planar graph into its planar bulk and a small
-    non-planar boundary. Compute the planar part exactly via FKT; pay
-    exponential cost only on the small boundary; combine.
+    r"""Split a mostly-planar graph into its planar bulk and a small
+    "extra-edge" set whose inclusion makes it non-planar. Decompose the
+    matching-count question into a sum over **2^|extra|** sub-problems,
+    each obtained by either DELETING or CONTRACTING each extra edge --
+    and the residual of each sub-problem is planar, so its matching
+    count is computable in poly time via FKT.
 
-    For a graph G with |E_extra| << |E| extra (non-planar-causing) edges,
-    this gives an answer in time `2^|E_extra| · poly(|E|)`. The
-    hybrid-dispatcher already does this for circuits; generalising it
-    to general Holant graphs is the natural next step.
+    The decomposition identity for perfect-matching count is the standard
+    one (Tutte / Lovasz-Plummer): for any edge `e = (u, v)` in a graph G,
 
-    Status: not implemented in v0.1. The decomposition logic exists in
-    `hybrid-dispatcher/hybrid_dispatcher.py` for the circuit case; lifting
-    it to a general framework primitive is the v0.2 deliverable.
+        M(G) = M(G - e) + M(G / uv)
+
+    where:
+      * `M(X)` is the number of perfect matchings of `X`,
+      * `G - e` is `G` with edge `e` removed,
+      * `G / uv` is `G` with `e` "contracted" -- both endpoints removed
+        (and all their other incident edges removed), reflecting that
+        `e` is forced INTO the matching, consuming both u and v.
+
+    Recursively applying this identity to all of the extra edges
+    produces a binary tree of depth `|extra|`; each leaf is the matching
+    count of a planar graph, computable in poly time via FKT. Total
+    cost: `2^|extra| * O(|V|^3)`.
+
+    Construction:
+
+        graph = {"vertices": [...], "edges": [...], "rotation": {...}}
+        extra_edges = [(u1, v1), (u2, v2), ...]    # the small "non-planar" set
+
+        h = HybridDecomposition(extra_edges)
+        result = h.apply({"vertices": [...], "edges": [...], "rotation": {...}})
+        # result.problem is a list of (planar sub-graph, sign) pairs;
+        # the matching count is the sum of M(planar_part) over the list.
+        # result.cost_overhead = len(extra_edges).
+
+    The "inverse" function applied to the sum of sub-problem matching
+    counts returns the matching count of the original graph (an exact
+    integer, no error).
+
+    Honest scope: this decomposition is for perfect-matching COUNT
+    specifically (the unweighted, signature-`PERFECT_MATCHING-at-every-
+    vertex` Holant problem). Generalising to other Holant signatures
+    follows the same pattern but with signature-specific delete/contract
+    rules; not implemented in v0.1.
     """
     name = "HybridDecomposition"
 
+    def __init__(self, extra_edges: List[Tuple[Any, Any]]):
+        """`extra_edges` is the set of "make-non-planar" edges. The
+        remaining edges of the input graph must form a planar embedding
+        (the caller is responsible for choosing the extra set; v0.2 will
+        ship an auto-detection helper)."""
+        # Store as a list of normalised (u, v) tuples (sorted endpoints
+        # for hashability).
+        self.extra_edges: List[Tuple[Any, Any]] = [
+            tuple(sorted([u, v], key=str)) for (u, v) in extra_edges
+        ]
+
     def applies_to(self, problem: Any) -> bool:
-        return False
+        """Applies if `problem` is a graph dict with vertices, edges, and
+        every declared extra edge is in the graph."""
+        if not isinstance(problem, dict):
+            return False
+        if "vertices" not in problem or "edges" not in problem:
+            return False
+        edge_set = {tuple(sorted([u, v], key=str)) for (u, v) in problem["edges"]}
+        return all(e in edge_set for e in self.extra_edges)
 
     def apply(self, problem: Any) -> ReductionResult:
-        raise NotImplementedError(
-            f"{self.name} is on the v0.2 roadmap. See "
-            f"admissibility-geometry/proposals/reductions_compositions_recursive_decomposition.md"
+        if not self.applies_to(problem):
+            raise ReductionNotApplicable(
+                f"{self.name}: problem is not a graph dict with the expected "
+                f"extra edges. Provide {{'vertices': ..., 'edges': ..., "
+                f"'rotation': ...}} where every extra edge is in 'edges'."
+            )
+        # Build the list of (sub-graph, contribution-weight) pairs by
+        # enumerating 2^|extra| subsets. Each subset describes which
+        # extras are "forced in the matching" (contract them) and which
+        # are "forbidden from the matching" (delete them).
+        sub_problems: List[Tuple[Any, int]] = []
+        vertices = list(problem["vertices"])
+        edges = [tuple(sorted([u, v], key=str)) for (u, v) in problem["edges"]]
+        extras = self.extra_edges
+        non_extras = [e for e in edges if e not in extras]
+        n_extras = len(extras)
+        for mask in range(2 ** n_extras):
+            # bit i of mask = 1 means extra i is FORCED IN the matching (contracted)
+            forced_in = [extras[i] for i in range(n_extras) if (mask >> i) & 1]
+            forced_out = [extras[i] for i in range(n_extras) if not (mask >> i) & 1]
+            # Validate: forced-in edges must be vertex-disjoint (otherwise
+            # they can't all be simultaneously in a matching).
+            occupied = set()
+            valid = True
+            for (u, v) in forced_in:
+                if u in occupied or v in occupied:
+                    valid = False; break
+                occupied.add(u); occupied.add(v)
+            if not valid:
+                continue
+            # Build the residual:
+            # - Remove every vertex occupied by a forced-in edge.
+            # - Remove every edge incident to those vertices.
+            # - Remove every forced-out extra edge.
+            residual_vertices = [v for v in vertices if v not in occupied]
+            forced_out_set = set(forced_out)
+            residual_edges = []
+            for (u, v) in non_extras + forced_in:
+                # forced_in edges themselves are already "consumed" by their
+                # endpoints being occupied, so they don't appear in the
+                # residual (their endpoints are gone).
+                if u in occupied or v in occupied:
+                    continue
+                if (u, v) in forced_out_set:
+                    continue
+                residual_edges.append((u, v))
+            sub_problems.append(({"vertices": residual_vertices,
+                                   "edges": residual_edges}, 1))
+
+        # The matching count of the original is sum of (weight * M(residual))
+        # over the sub-problems. The inverse function takes the list of
+        # sub-problem matching counts and computes that sum.
+        def inverse(sub_counts: List[int]) -> int:
+            if len(sub_counts) != len(sub_problems):
+                raise ValueError(
+                    f"inverse: expected {len(sub_problems)} sub-counts, got {len(sub_counts)}"
+                )
+            return sum(w * c for (_, w), c in zip(sub_problems, sub_counts))
+
+        return ReductionResult(
+            problem={"sub_problems": [sp for (sp, _) in sub_problems],
+                     "weights": [w for (_, w) in sub_problems]},
+            cost_overhead=float(n_extras),   # log2 of the 2^|extras| factor
+            inverse=inverse,
+            notes=f"decomposed via {n_extras} extra edges into {len(sub_problems)} valid sub-problems",
         )
 
 

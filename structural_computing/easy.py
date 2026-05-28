@@ -529,6 +529,56 @@ class StructuralComputer:
                 out.append(x)
         return out
 
+    # -- hybrid decomposition (matching count on non-planar graphs) ---------
+
+    def count_matchings_hybrid(self,
+                                graph: GraphLike,
+                                extra_edges: Sequence[Tuple[Any, Any]],
+                                ) -> int:
+        """Exact perfect-matching count on a non-planar graph, computed by
+        **branching on a small set of "extra" edges** that makes the
+        residual planar.
+
+        The decomposition identity is the standard one for perfect-matching
+        count (Tutte, Lovasz-Plummer): for any edge `e = (u, v)`,
+        `M(G) = M(G - e) + M(G / uv)`. Recursively applying it to all of
+        `extra_edges` gives `2^|extra_edges|` planar sub-problems whose
+        matching counts sum to the original.
+
+        This is the first concrete operation in the reductions layer; it
+        widens the framework's natively-in-family scope from "planar
+        graphs only" to "any graph that becomes planar after removing a
+        small set of edges." Cost is `2^|extra_edges| * O(|V|^3)`.
+
+        Args:
+          graph: a graph in any of the wrapper's accepted formats.
+          extra_edges: the small set of edges to branch on; the graph
+            minus these edges should be planar (or at least
+            brute-force-tractable for the sub-problems' matching counts
+            via the framework's verifier).
+
+        Returns:
+          Exact perfect-matching count of `graph`, as an integer.
+
+        Honest scope: at small `n`, sub-problems are evaluated via
+        `brute_force_count_matchings`; for v0.2, sub-problems will be
+        evaluated via the planar Pfaffian (FKT) for asymptotic poly-time
+        on the residual.
+        """
+        from .transform import HybridDecomposition
+        vertices, edges, _ = _normalise_graph(graph)
+        h = HybridDecomposition(extra_edges)
+        problem = {"vertices": vertices, "edges": edges}
+        result = h.apply(problem)
+        # Leaf evaluator: brute-force matching count on each planar
+        # sub-problem. (v0.2 will use the planar Pfaffian here for
+        # asymptotic poly-time; today's brute force is fine at small n.)
+        sub_counts = [
+            brute_force_count_matchings(sp["vertices"], sp["edges"])
+            for sp in result.problem["sub_problems"]
+        ]
+        return result.inverse(sub_counts)
+
     # -- signatures ---------------------------------------------------------
 
     def classify_function(self, values: Sequence) -> Classification:
