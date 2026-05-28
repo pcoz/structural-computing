@@ -141,6 +141,58 @@ def test_holographic_basis_pair_evaluate_non_identity_directs_to_transform():
         hbp.evaluate(lambda p: 0)
 
 
+# ---------------------------------------------------------------------------
+# Auto-discovery of T (v0.3, Cai-Lu SRP practical fragment)
+# ---------------------------------------------------------------------------
+
+def test_discover_basis_finds_hadamard_for_3and():
+    """[1, 0, 0, 1] is matchgate-realisable on the Hadamard basis;
+    discover_basis() finds it from the canonical candidate list."""
+    h = HolographicBasisPair()
+    discovery = h.discover_basis([1, 0, 0, 1])
+    assert discovery is not None
+    T, result = discovery
+    assert result.is_realisable
+    distance = h._matchgate_standard_distance(result.values)
+    assert distance < 1e-6
+
+
+def test_discover_basis_identity_for_already_standard_signature():
+    """A signature that's already in matchgate-standard form returns
+    the identity basis (first canonical candidate)."""
+    h = HolographicBasisPair()
+    discovery = h.discover_basis([2, 0, 2, 0, 2])
+    assert discovery is not None
+    T, _result = discovery
+    assert np.allclose(T, np.eye(2))
+
+
+def test_discover_basis_returns_none_for_non_realisable():
+    """[1, 0, 1, 0, 2] doesn't satisfy the order-2 recurrence; no basis
+    can rescue it. discover_basis returns None per Cai-Lu Theorem 2.5."""
+    h = HolographicBasisPair()
+    assert h.discover_basis([1, 0, 1, 0, 2]) is None
+
+
+def test_discover_basis_returns_none_for_degenerate_single_cube():
+    """[1, 1, 1, 1] = (u+v)^3 as a polynomial -- only matchgate-realisable
+    in a degenerate (collapsed-to-a-corner) sense. discover_basis
+    honestly returns None rather than surfacing the degenerate form."""
+    h = HolographicBasisPair()
+    assert h.discover_basis([1, 1, 1, 1]) is None
+
+
+def test_discover_basis_finds_basis_for_nae3():
+    """The NAE-3 signature [0, 1, 1, 0] is matchgate-realisable on the
+    Hadamard basis (transforms to [6, 0, -2, 0])."""
+    h = HolographicBasisPair()
+    discovery = h.discover_basis([0, 1, 1, 0])
+    assert discovery is not None
+    T, result = discovery
+    distance = h._matchgate_standard_distance(result.values)
+    assert distance < 1e-6
+
+
 def test_holographic_basis_pair_no_basis_raises():
     """No basis_matrix supplied -> ValueError."""
     hbp = HolographicBasisPair(basis_matrix=None)
