@@ -28,7 +28,7 @@ external tool. No silent approximation.
 > a [one-page business case](book/01a-the-business-case-in-one-page.md)
 > with concrete dollar figures.
 
-## What this lets you do
+## What this codebase / repo / library lets you do
 
 - **Compare two configurations exactly** even when the difference is
   below Monte-Carlo's noise floor. Two network topologies, two
