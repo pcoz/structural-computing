@@ -30,6 +30,16 @@ external tool. No silent approximation.
 
 ## What this codebase / repo / library lets you do
 
+The framework wraps a handful of polynomial-time exact algorithms
+(matchgate-Holant evaluation, FKT, Kasteleyn, Hungarian, CP-SAT
+diagnostic) behind a small declarative API. You ask a *question*
+about a *combinatorially structured input* — how many? which is
+cheapest? what's the failure probability? which configuration is
+more reliable? — and the framework picks the right algorithm
+and returns the exact answer. If your problem doesn't fit, the
+framework refuses to guess and tells you what tool to reach for
+instead. In concrete terms, this lets you:
+
 - **Compare two configurations exactly** even when the difference is
   below Monte-Carlo's noise floor. Two network topologies, two
   reinsurance treaty structures, two CI pipeline designs that look
