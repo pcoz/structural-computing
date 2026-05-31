@@ -31,8 +31,21 @@ quadrant structure: tutorial (learn), how-to (do), reference
   choice argument for min-cost optimisation on the same
   admissible-set machinery as counting.
 
+## Book — the narrative guide
+
+- [Declarative Structural Computing — a Practitioner's Guide](book.md)
+  — a 17-chapter narrative walkthrough of the paradigm: the
+  100,000-line problem, the SQL precedent, the five plain-
+  English concepts, three runnable worked examples (reliability,
+  scheduling, CP-SAT pre-flight), integration patterns, and the
+  long-horizon industry view. Includes a one-page business case
+  for business-analyst readers. Chapter files live under
+  [`../book/`](../book/) with runnable examples at
+  [`../book/examples/`](../book/examples/).
+
 ## Release history
 
+- [v1.1 plan](v1.1-plan.md) — post-1.0 polish (calibration + Diátaxis docs + stability promotions).
 - [v1.0 plan](v1.0-plan.md) — the production-ready milestone.
 - [v0.13 plan](v0.13-plan.md) — CP-SAT diagnostic layer.
 - [v0.12 plan](v0.12-plan.md) — wrapper consolidation.

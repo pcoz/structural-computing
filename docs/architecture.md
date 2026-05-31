@@ -5,7 +5,7 @@ mental model of how the package fits together. Reading this end-to-end
 takes ~20 minutes and should cover everything you'd otherwise have to
 piece together from the source.
 
-**Version covered:** v0.6.0a1 (current `main`).
+**Version covered:** v1.1.0 (released 2026-05-31; current `main`).
 
 ---
 
@@ -161,7 +161,7 @@ structural-computing/
 │   ├── transform.py           ← reductions (one-shot transformations)
 │   ├── compose.py             ← compositions (combine multiple in-family evals)
 │   └── decompose.py           ← decompositions (recursive splitting)
-├── tests/                     ← pytest suite (281 tests across 15 modules)
+├── tests/                     ← pytest suite (302 tests across 15 modules)
 │   ├── test_smoke.py          ← public-API contract + wrapper smoke
 │   ├── test_orchestrator.py   ← 26 orchestrator scenarios
 │   ├── test_{module}.py       ← per-module coverage
@@ -1706,7 +1706,7 @@ Guarded by `tests/originality/`:
 
 ## 12. Testing strategy
 
-- **281 tests** across ~15 modules. Run with `pytest tests/`.
+- **302 tests** across ~15 modules. Run with `pytest tests/`.
 - Per-module test files cover each primitive in isolation.
 - `tests/test_smoke.py` is the public-API contract: every name in
   `structural_computing.__all__` must round-trip through this test;
@@ -1798,4 +1798,4 @@ under `docs/`. Research-trail material, paradigm-level direction, and
 session notes live in the private research parent `admissibility-geometry`
 on disk at `C:\Temp\admissibility-geometry`.
 
-Last updated: 2026-05-31 (against v0.3.0a1).
+Last updated: 2026-05-31 (against v1.1.0).

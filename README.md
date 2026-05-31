@@ -452,6 +452,13 @@ This repository's own documentation is organised by the
 - **Architecture deep dive:**
   [`docs/architecture.md`](docs/architecture.md) — comprehensive
   system reference.
+- **Narrative guide (the book):**
+  [`docs/book.md`](docs/book.md) — a 17-chapter practitioner's
+  guide covering the paradigm, the business case, three worked
+  examples (reliability, scheduling, CP-SAT pre-flight),
+  integration patterns, and the long-horizon view. The chapter
+  files live under [`book/`](book/) with runnable examples in
+  [`book/examples/`](book/examples/).
 
 The companion worked-examples repo
 [`free-fermion-quantum-simulation`](https://github.com/pcoz/free-fermion-quantum-simulation)
@@ -543,7 +550,7 @@ https://github.com/pcoz/structural-computing
   the BFS-layer simple case fails on fat-middle-level planar
   graphs; closed-form SRP for complex-roots rank-2 signatures via
   `T = [[1, -α], [0, β]]`. 272 tests passing.
-- **v0.6.0a1** (current): D1 promoted the v0.5 augmented-Plücker
+- **v0.6.0a1** (shipped): D1 promoted the v0.5 augmented-Plücker
   helper to `holant-tools v0.6.0` (architectural cleanup, math
   primitive now lives in the engine); D2 added a level-based +
   articulation-augmentation backup to `_lipton_tarjan_separator`
@@ -573,10 +580,22 @@ https://github.com/pcoz/structural-computing
   delegates 13 single-leaf methods through the internal
   `Orchestrator` instance — single source of truth for
   evaluation logic.
-- **v0.13.0a1** (current): CP-SAT diagnostic + rewrite layer.
+- **v0.13.0a1**: CP-SAT diagnostic + rewrite layer.
   `sc.rewrite_cpsat_model(model)` returns a structurally cheaper
   rewritten `cp_model.CpModel` or an explicit "can't help"
   signal. 302 tests.
-- **v1.0.0** (next): API stability contract; production-ready
-  for downstream packages. Documentation pass + calibration
-  runs on the new leaves + per-method stability markers.
+- **v1.0.0** (2026-05-31): production-ready release. API
+  stability contract in `docs/STABILITY.md`. Documentation
+  pass + first calibration run + Development-Status classifier
+  bumped to Production/Stable.
+- **v1.1.0** (current, 2026-05-31): post-1.0 polish. Extended
+  bench coverage to 11 calibrated leaves (was 4); Diátaxis-
+  style docs restructure (`docs/tutorial/`, `docs/how-to/`,
+  `docs/reference/`, `docs/explanation/`); 5 symbol groups
+  promoted from Experimental to Stable. Plus a 17-chapter
+  narrative ebook under `book/` (index: `docs/book.md`).
+  302 tests.
+- **v1.2.0+** (next): a domain-specific DSL on top of the
+  framework — most likely workflow-systems first, then the
+  catastrophe-modelling "literal one-liner" form per the
+  research roadmap.
