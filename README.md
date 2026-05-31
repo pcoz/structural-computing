@@ -74,7 +74,14 @@ instead. In concrete terms, this lets you:
   bounded DP, Shannon expansion, circuit cutting). The framework's
   reduction layer makes this routine.
 
-## A taste
+## A taste — your first one-liner
+
+Before the full mental model, here's the simplest possible
+end-to-end use. We define two candidate network topologies as
+edge lists (the framework accepts plain Python lists of tuples
+for graphs), then ask the framework which one is more reliable
+under random edge failures. The whole thing — install, import,
+two network definitions, the comparison — fits on one screen.
 
 ```bash
 pip install structural-computing
