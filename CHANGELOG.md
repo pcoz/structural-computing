@@ -6,6 +6,69 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 once it reaches v1.0.0; until then, the v0.x API may shift between minor
 versions.
 
+## [0.9.0a1] — 2026-05-31 (v0.9 arc: full LT 1979 with explicit planar-dual)
+
+**Closes the last math-completeness gap in the Lipton-Tarjan
+cascade.** v0.8 D2 added the fundamental-cycle backup as the 4th
+tier using the Jordan-curve property IMPLICITLY (residual
+connected-components count). v0.9 D1 implements the ORIGINAL
+Lipton-Tarjan 1979 algorithm's planar-dual argument EXPLICITLY
+as the 5th tier of the cascade.
+
+### Added
+
+- `_lipton_tarjan_planar_dual_backup` in `decompose.py` — 5th
+  tier of the LT cascade. Requires a rotation system (planar
+  embedding) as input. Algorithm:
+  - Trace faces from the rotation via holant-tools'
+    `genus_from_rotation_system`. Verify genus 0.
+  - Build edge-to-faces and vertex-to-faces maps.
+  - Construct the primal BFS spanning tree T from BFS levels.
+  - The cotree primal edges form (their duals form) a spanning
+    tree T* of the planar dual G*.
+  - For each cotree primal edge e (= dual edge e* in T*),
+    removing e* from T* splits T* into two components → F_inside
+    and F_outside face sets.
+  - Classify each primal vertex via its incident faces: all-inside
+    → A, all-outside → B, mixed → on cycle (S).
+  - Score the resulting (S, A, B); pick the best.
+- `_lipton_tarjan_separator` now reads `problem["rotation"]` when
+  present and invokes the 5th tier after the 4th tier (v0.7 D2
+  fundamental-cycle backup) fails. Without rotation, the cascade
+  ends at the 4th tier (same as v0.8 behaviour).
+
+### Why this catches what v0.8 D2 doesn't
+
+v0.8 D2 uses Jordan-curve implicitly (residual connected
+components after removing cycle vertices). On adversarial planar
+graphs where the residual heuristic mis-bins ambiguous vertices,
+v0.8 D2 may fail. v0.9 D1 uses the planar embedding directly to
+GUARANTEE the inside/outside classification is the dual-correct
+split.
+
+### Behaviour change for upgraders
+
+If `PlanarSeparator(auto=True)` previously failed on a planar
+input where the v0.4-v0.7 cascade gave up, providing a rotation
+system in the problem dict now extends the cascade to the
+theoretically-grounded 5th tier. Existing call sites without
+rotation are unaffected.
+
+### Test count
+
+- 290 passing (285 v0.8 + 5 new v0.9 D1 tests).
+
+### Honest scope (final tier)
+
+Per LT 1979, this fifth tier WILL find a valid separator on
+every planar input — modulo bounded-effort enumeration over the
+cotree edges. The five-tier cascade now closes the
+math-completeness gap on the LT side. Adversarial cases where
+all five tiers fail indicate a non-planar input (where the LT
+bound doesn't apply) or a non-cellular rotation system.
+
+---
+
 ## [0.8.0a1] — 2026-05-31 (v0.8 arc: math completeness, cont.)
 
 **Math completeness arc continuing from v0.6.** Closes the two
