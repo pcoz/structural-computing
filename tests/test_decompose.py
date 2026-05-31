@@ -248,3 +248,179 @@ def test_multibag_dp_empty_bags_raises():
     decomp = TreewidthBoundedDP(tree_decomposition=td)
     with pytest.raises(ValueError):
         decomp.decompose({"vertices": [0], "edges": []})
+
+
+# ---------------------------------------------------------------------------
+# v0.4: Lipton-Tarjan auto-separator for PlanarSeparator
+# ---------------------------------------------------------------------------
+#
+# These tests cover the auto-discovery path: PlanarSeparator(auto=True)
+# invokes the BFS-layer simple case of Lipton-Tarjan 1979 in decompose().
+# Verify (a) the partition properties, (b) the size bound 2*sqrt(2|V|),
+# (c) round-trip with brute-force matching count on canonical planar
+# graphs, and (d) the honest-stop on disconnected / failing inputs.
+
+
+def _make_planar_grid(d: int):
+    """Build a d-by-d planar grid as a graph dict."""
+    verts = [(i, j) for i in range(d) for j in range(d)]
+    edges = []
+    for i in range(d):
+        for j in range(d):
+            if i + 1 < d:
+                edges.append(((i, j), (i + 1, j)))
+            if j + 1 < d:
+                edges.append(((i, j), (i, j + 1)))
+    return {"vertices": verts, "edges": edges}
+
+
+def test_lipton_tarjan_partition_is_valid_on_grids():
+    """The discovered (S, A, B) partition the vertex set, and no edge
+    connects A and B directly. Verified on planar grids of sizes 3-6."""
+    from structural_computing.decompose import _lipton_tarjan_separator
+    for d in (3, 4, 5, 6):
+        g = _make_planar_grid(d)
+        S, A, B = _lipton_tarjan_separator(g)
+        # Cover: S ∪ A ∪ B = V.
+        assert S | A | B == set(g["vertices"])
+        # Disjoint: pairwise disjoint.
+        assert not (S & A) and not (S & B) and not (A & B)
+        # No direct A-B edge.
+        for (u, v) in g["edges"]:
+            assert not ((u in A and v in B) or (u in B and v in A)), \
+                f"d={d}: edge {(u, v)} crosses A-B directly"
+
+
+def test_lipton_tarjan_size_bound_holds_on_grids():
+    """The Lipton-Tarjan theorem guarantees |S| <= 2*sqrt(2|V|). Verify
+    on planar grids."""
+    import math
+    from structural_computing.decompose import _lipton_tarjan_separator
+    for d in (3, 4, 5, 6, 7, 8):
+        g = _make_planar_grid(d)
+        n = len(g["vertices"])
+        S, A, B = _lipton_tarjan_separator(g)
+        bound = 2.0 * math.sqrt(2.0 * n)
+        assert len(S) <= bound, \
+            f"d={d}, n={n}: |S|={len(S)} exceeds bound {bound:.2f}"
+
+
+def test_lipton_tarjan_balanced_sides_on_grids():
+    """The Lipton-Tarjan theorem guarantees |A|, |B| <= 2|V|/3. Verify
+    on planar grids."""
+    from structural_computing.decompose import _lipton_tarjan_separator
+    for d in (4, 5, 6, 7, 8):
+        g = _make_planar_grid(d)
+        n = len(g["vertices"])
+        S, A, B = _lipton_tarjan_separator(g)
+        bound = 2.0 * n / 3.0
+        assert len(A) <= bound, \
+            f"d={d}: |A|={len(A)} exceeds 2|V|/3 = {bound}"
+        assert len(B) <= bound, \
+            f"d={d}: |B|={len(B)} exceeds 2|V|/3 = {bound}"
+
+
+def test_lipton_tarjan_handles_k4():
+    """K_4 (4-vertex complete graph) is planar; auto-separator should
+    return a valid partition (possibly trivial: K_4 is small enough
+    that the bound 2*sqrt(8) ~ 5.66 exceeds n=4, so the entire vertex
+    set as the separator is OK)."""
+    from structural_computing.decompose import _lipton_tarjan_separator
+    g = {"vertices": [0, 1, 2, 3],
+         "edges": [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]}
+    S, A, B = _lipton_tarjan_separator(g)
+    assert S | A | B == set(g["vertices"])
+
+
+def test_lipton_tarjan_handles_cycles():
+    """Cycle graphs C_n are planar; the BFS-layer gives clean
+    separators (typically size 2)."""
+    from structural_computing.decompose import _lipton_tarjan_separator
+    for n in (4, 6, 8, 10):
+        verts = list(range(n))
+        edges = [(i, (i + 1) % n) for i in range(n)]
+        g = {"vertices": verts, "edges": edges}
+        S, A, B = _lipton_tarjan_separator(g)
+        assert S | A | B == set(verts)
+        # No A-B direct edge.
+        for (u, v) in edges:
+            assert not ((u in A and v in B) or (u in B and v in A)), \
+                f"C_{n}: edge {(u, v)} crosses A-B"
+
+
+def test_lipton_tarjan_disconnected_raises():
+    """Disconnected graphs aren't handled by the simple case (BFS
+    only reaches one component). The function honestly raises
+    ValueError so the caller knows to fall back."""
+    from structural_computing.decompose import _lipton_tarjan_separator
+    g = {"vertices": [0, 1, 2, 3], "edges": [(0, 1), (2, 3)]}
+    with pytest.raises(ValueError, match="disconnected"):
+        _lipton_tarjan_separator(g)
+
+
+def test_lipton_tarjan_trivial_small_graph():
+    """Graphs with n < 3 trivially return (V, empty, empty)."""
+    from structural_computing.decompose import _lipton_tarjan_separator
+    S, A, B = _lipton_tarjan_separator({"vertices": [0, 1], "edges": [(0, 1)]})
+    assert S == {0, 1}
+    assert A == set()
+    assert B == set()
+
+
+def test_planar_separator_auto_mode_round_trip_on_grids():
+    """End-to-end: PlanarSeparator(auto=True) on a 4x4 planar grid
+    produces a matching count agreeing with brute-force."""
+    g = _make_planar_grid(4)
+    sep = PlanarSeparator(auto=True)
+    plan = sep.decompose(g)
+    auto_count = plan.evaluate(
+        lambda p: brute_force_count_matchings(p["vertices"], p["edges"])
+    )
+    brute_count = brute_force_count_matchings(g["vertices"], g["edges"])
+    assert int(auto_count) == brute_count, \
+        f"auto={auto_count}, brute={brute_count}"
+
+
+def test_planar_separator_auto_round_trip_on_cycles():
+    """Auto-PlanarSeparator on cycle graphs C_4, C_6 -- a clean
+    test case where the partition is unambiguous."""
+    for n in (4, 6):
+        verts = list(range(n))
+        edges = [(i, (i + 1) % n) for i in range(n)]
+        g = {"vertices": verts, "edges": edges}
+        sep = PlanarSeparator(auto=True)
+        plan = sep.decompose(g)
+        auto_count = plan.evaluate(
+            lambda p: brute_force_count_matchings(p["vertices"], p["edges"])
+        )
+        brute_count = brute_force_count_matchings(verts, edges)
+        assert int(auto_count) == brute_count, \
+            f"C_{n}: auto={auto_count}, brute={brute_count}"
+
+
+def test_planar_separator_auto_re_discovers_per_call():
+    """A single PlanarSeparator(auto=True) instance should re-discover
+    the separator when decompose() is called on a different graph.
+    (Important when the same instance is reused, e.g., across a
+    pipeline of similar but distinct sub-problems.)"""
+    g1 = _make_planar_grid(3)
+    g2 = _make_planar_grid(4)
+    sep = PlanarSeparator(auto=True)
+    sep.decompose(g1)
+    sep1 = sep.separator
+    sep.decompose(g2)
+    sep2 = sep.separator
+    # Different graphs should produce different separator vertex sets.
+    assert sep1 != sep2, "auto mode should re-discover per decompose call"
+
+
+def test_planar_separator_auto_mode_constructor_validation():
+    """auto=False (default) without explicit sets raises ValueError;
+    auto=True without sets is fine."""
+    # auto=False, no sets -> error.
+    with pytest.raises(ValueError, match="separator"):
+        PlanarSeparator()
+    # auto=True, no sets -> fine.
+    sep = PlanarSeparator(auto=True)
+    assert sep.auto is True
+    assert sep.separator is None  # populated by decompose()

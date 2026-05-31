@@ -466,7 +466,12 @@ def _holographic_transform_general_leaf(problem: Any, question: str) -> Dict[str
     apply ``T^{otimes a}`` to the length-2^arity values tensor.
     The problem dict must carry ``values`` (length ``2**arity``),
     ``arity`` (int), and ``basis_matrix`` (2x2 invertible). Returns
-    ``{"values": transformed, "arity": arity, "basis_matrix": T}``."""
+    ``{"values": transformed, "arity": arity, "basis_matrix": T,
+    "is_realisable": bool, "realisability_check": str}``.
+
+    The ``is_realisable`` / ``realisability_check`` fields are
+    populated by the v0.4 MGI check on the transformed signature
+    (see :class:`HolographicBasisResult` for the check semantics)."""
     from .compose import HolographicBasisPair as _HBP
     if not isinstance(problem, dict):
         raise ValueError("holographic_transform_general_leaf expects a dict")
@@ -481,9 +486,11 @@ def _holographic_transform_general_leaf(problem: Any, question: str) -> Dict[str
         problem["values"], arity=int(problem["arity"]),
     )
     return {
-        "values":       result.values,
-        "arity":        int(problem["arity"]),
-        "basis_matrix": result.basis_matrix.tolist(),
+        "values":               result.values,
+        "arity":                int(problem["arity"]),
+        "basis_matrix":         result.basis_matrix.tolist(),
+        "is_realisable":        result.is_realisable,
+        "realisability_check":  result.realisability_check,
     }
 
 
@@ -611,10 +618,11 @@ class Orchestrator:
              T2 leaf evaluator. The gadget preserves the SIGNED matchgate
              signature, not unsigned PerfMatch in general.
           4.8. **Planar separator** -- if `hints["planar_separator"]` is
-             supplied (with keys ``separator``, ``side_a``, ``side_b``),
-             run the divide-and-conquer separator decomposition; sum
-             over (S_to_A, S_to_B, S_pairs) partitions weighted by
-             restricted-PerfMatch products.
+             supplied (as a dict with keys ``separator``, ``side_a``,
+             ``side_b``, OR the string ``"auto"`` for v0.4 Lipton-Tarjan
+             auto-discovery), run the divide-and-conquer separator
+             decomposition; sum over (S_to_A, S_to_B, S_pairs)
+             partitions weighted by restricted-PerfMatch products.
           4.9. **Circuit cut** -- if `hints["circuit_cut"]` is supplied
              (an iterable of edges), enumerate 2^|cut| forced-in /
              forced-out assignments via the Tutte / Lovasz-Plummer
@@ -901,22 +909,40 @@ class Orchestrator:
                      "failed", str(e))
 
         # ----- Phase 4.8: PlanarSeparator (hint-driven) ---------------
-        # If the user supplied hints["planar_separator"] = {"separator":
-        # ..., "side_a": ..., "side_b": ...} AND the question is
-        # matching_count / weighted_matching_sum, run the divide-and-
-        # conquer separator decomposition: enumerate partitions of the
-        # separator vertices, sum weighted products of restricted
-        # PerfMatches.
+        # If the user supplied `hints["planar_separator"]` AND the
+        # question is matching_count / weighted_matching_sum, run the
+        # divide-and-conquer separator decomposition: enumerate
+        # partitions of the separator vertices, sum weighted products
+        # of restricted PerfMatches.
+        #
+        # Two hint forms are recognised:
+        #   - dict: {"separator": ..., "side_a": ..., "side_b": ...}
+        #           explicit user-supplied separator (v0.3 behaviour).
+        #   - "auto" string: invoke Lipton-Tarjan 1979 auto-discovery
+        #           of (S, A, B) via the BFS-layer simple case (v0.4).
         if ("planar_separator" in hints
                 and question in ("matching_count", "weighted_matching_sum")):
             try:
                 from .decompose import PlanarSeparator as _PSep
                 sep_spec = hints["planar_separator"]
-                psep = _PSep(
-                    separator=sep_spec["separator"],
-                    side_a=sep_spec["side_a"],
-                    side_b=sep_spec["side_b"],
-                )
+                # Distinguish auto-discovery from explicit user-supplied
+                # separator. The string "auto" is the v0.4 shorthand.
+                if sep_spec == "auto":
+                    psep = _PSep(auto=True)
+                    action_label = "PlanarSeparator(auto=True)"
+                else:
+                    psep = _PSep(
+                        separator=sep_spec["separator"],
+                        side_a=sep_spec["side_a"],
+                        side_b=sep_spec["side_b"],
+                    )
+                    action_label = (
+                        f"PlanarSeparator(|S|={len(sep_spec['separator'])})"
+                    )
+                # decompose() raises ValueError if auto-discovery's
+                # simple case fails; that propagates to the except
+                # block below and the orchestrator continues to the
+                # next phase.
                 plan = psep.decompose(problem)
                 leaf_t2 = self.leaf_registry.get(("T2", question))
                 if leaf_t2 is None:
@@ -926,12 +952,18 @@ class Orchestrator:
                 answer = plan.evaluate(lambda p: leaf_t2(p, question))
                 if post_inverse is not None:
                     answer = post_inverse(answer)
-                emit("planar-separator",
-                     (f"PlanarSeparator(|S|={len(sep_spec['separator'])})"),
-                     "ok",
-                     f"answer={answer!r}; {plan.notes}")
-                reductions_applied.append(
-                    f"PlanarSeparator(|S|={len(sep_spec['separator'])})")
+                # In auto mode, the discovered separator size goes into
+                # the reductions_applied trace alongside the answer.
+                if sep_spec == "auto":
+                    discovered_size = len(psep.separator)
+                    summary = (f"answer={answer!r}; auto-discovered "
+                               f"|S|={discovered_size}; {plan.notes}")
+                    applied_tag = f"PlanarSeparator(auto, |S|={discovered_size})"
+                else:
+                    summary = f"answer={answer!r}; {plan.notes}"
+                    applied_tag = action_label
+                emit("planar-separator", action_label, "ok", summary)
+                reductions_applied.append(applied_tag)
                 return OrchestratorResult(
                     answer=answer,
                     classification=cls,

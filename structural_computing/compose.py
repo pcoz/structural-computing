@@ -28,7 +28,7 @@ The full set of planned compositions lives in
 admissibility-geometry/proposals/reductions_compositions_recursive_decomposition.md.
 """
 import dataclasses
-from typing import Any, Callable, List, Optional, Protocol, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence, Tuple
 
 
 # ---------------------------------------------------------------------------
@@ -299,6 +299,7 @@ class HolographicBasisPair:
             is_realisable=is_real,
             recurrence_coefficients=recurrence,
             basis_matrix=T,
+            realisability_check="order_2_recurrence",
         )
 
     def _matchgate_realisable(self, values):
@@ -400,15 +401,404 @@ class HolographicBasisPair:
             # tensordot prepends the new axis; move it back to `axis`.
             tensor = np.moveaxis(tensor, 0, axis)
         new_values = tensor.reshape(-1).tolist()
+        is_realisable, check_name = self._check_general_realisability(
+            new_values, arity,
+        )
         return HolographicBasisResult(
             values=new_values,
-            is_realisable=None,
+            is_realisable=is_realisable,
             recurrence_coefficients=None,
             basis_matrix=T,
+            realisability_check=check_name,
         )
 
     # -----------------------------------------------------------------
-    # Auto-discovery of T (v0.3 -- the practical fragment of Cai-Lu's SRP)
+    # MGI (Matchgate-Identity) check for general (non-symmetric)
+    # signatures (v0.4 deliverable)
+    # -----------------------------------------------------------------
+    #
+    # The math, in one paragraph:
+    #
+    #     A matchgate is a planar weighted graph with a designated set
+    #     of "external" vertices. Its STANDARD SIGNATURE on a bitstring
+    #     `b = (b_0, ..., b_{a-1})` of length `a` is the signed
+    #     perfect-matching count of the graph with the externals at
+    #     positions `i` where `b_i = 0` left in place and the externals
+    #     at positions where `b_i = 1` removed. By Valiant 2008 +
+    #     Cai-Lu 2011, these signatures (viewed as a 2^a-dim tensor)
+    #     are exactly the simultaneous-zero locus of a specific set of
+    #     polynomial identities -- the MATCHGATE IDENTITIES, derived
+    #     from the Grassmann-Plücker identities for Pfaffians of skew-
+    #     symmetric matrices via Valiant's framework.
+    #
+    # What this method checks: given a transformed signature tensor
+    # (length 2^arity), decide whether it lies in the standard-basis
+    # matchgate locus. The check has three arity-dependent paths,
+    # corresponding to three regimes in the matchgate-identity theory:
+    #
+    #   arity < 4 -- PARITY ONLY.
+    #     Below arity 4, the only identities are the parity-vanishing
+    #     equations (Valiant 2008 Propositions 6.1, 6.2). A signature
+    #     is matchgate-realisable on the standard basis iff either:
+    #       * all odd-Hamming-weight entries are zero (EVEN parity
+    #         branch -- the matchgate has an even number of unmatched
+    #         externals), OR
+    #       * all even-Hamming-weight entries are zero (ODD parity
+    #         branch -- this requires the AUGMENTED-PFAFFIAN framework
+    #         with a virtual omega vertex; see Cai-Lu 2011 §4).
+    #     No identities beyond parity exist at this arity; parity is
+    #     necessary AND sufficient.
+    #
+    #   arity = 4 -- PARITY PLUS ONE IDENTITY PER BRANCH.
+    #     At arity 4, the smallest Pfaffian identity kicks in. For the
+    #     EVEN-parity branch this is the classical 4-pair identity
+    #
+    #         tau_0000 * tau_1111
+    #             - tau_1100 * tau_0011
+    #             + tau_1010 * tau_0101
+    #             - tau_1001 * tau_0110  =  0
+    #
+    #     (the three ways of pairing {0,1,2,3} into two-element subsets,
+    #     each giving a Pfaffian product, plus the full and empty
+    #     Pfaffians). For the ODD-parity branch, the analogous identity
+    #     is derived via the augmented (n+1)x(n+1) Kasteleyn matrix
+    #     with a virtual omega vertex (Cai-Lu 2011 §4 augmented-Pfaffian
+    #     framework). Both identities are SUFFICIENT (in conjunction
+    #     with parity) for standard-basis matchgate realisability at
+    #     arity 4.
+    #
+    #   arity >= 5 -- PLÜCKER ENUMERATION (+ AUGMENTED WEIGHT-1 AT
+    #                 EVEN ARITIES).
+    #     At arity n >= 5, the general Plücker quadratic identities
+    #     give one identity per choice of 4-subset {a,b,c,d} of
+    #     positions and each (even, resp. odd) cardinality subset S
+    #     of the remaining n-4 positions. By Plücker's classical
+    #     result this enumeration is COMPLETE for the even-parity
+    #     branch. For the odd-parity branch, the augmented weight-1
+    #     identity Sigma_i (-1)^i tau(e_i) tau(complement(e_i))
+    #     gives an additional necessary equation; this is meaningful
+    #     ONLY at EVEN arities (at odd arity it reduces to 0=0
+    #     because weight n-1 has the wrong parity -- see the
+    #     same-parity-pair condition in the engine docstring).
+    #     The check is a tight necessary check at arity >= 6 odd-
+    #     parity (a strict over-approximation of the true realisable
+    #     locus); arity 5 odd-parity is fully covered by the Plücker
+    #     enumeration since |remaining| = 1 gives one identity per
+    #     4-subset with S = {the remaining position}.
+    #
+    # Bridge to the engine: the matchgate-identity functions live in
+    # `holant-tools.non_symmetric` (shipped in holant-tools v0.4.0).
+    # They accept a `tau` dict mapping bitstrings (`Tuple[int, ...]`)
+    # to numeric or symbolic values, and return a polynomial expression
+    # in those values. For numeric tau (our case), the expression
+    # evaluates to a numeric (sympy Float or Python float); we test
+    # whether |expression| falls below a scale-invariant tolerance.
+    #
+    # Why standard-basis-specific: this check answers the question
+    # "is the TRANSFORMED signature (after T^⊗a is applied) realisable
+    # on the STANDARD basis?" -- which is the question Valiant's
+    # holographic-algorithm framework cares about. A different
+    # question, "is the signature realisable on SOME basis?", is
+    # handled by the symmetric path's order-2-recurrence check
+    # (`_matchgate_realisable`) for symmetric inputs, or by
+    # `discover_basis` for general inputs.
+    # -----------------------------------------------------------------
+
+    @staticmethod
+    def _flat_index_to_bitstring(flat_index: int, arity: int) -> Tuple[int, ...]:
+        """Convert a flat-array index into the bitstring convention used
+        by ``holant_tools.non_symmetric``.
+
+        Why this bridge exists
+        ----------------------
+        The two packages use different bitstring conventions internally,
+        and the matchgate-identity functions in ``holant-tools`` look up
+        tau values by bitstring tuple. We MUST get the convention right
+        or the identities will be evaluated on the wrong entries.
+
+        ``structural-computing`` convention (after the
+        ``tensor.reshape(-1)`` in :meth:`transform_signature_general`):
+          The 1D length-2^arity values array is interpreted as a tensor
+          of shape ``(2,)*arity`` in numpy's C-order (row-major). This
+          means ``tensor[i_0, i_1, ..., i_{a-1}]`` sits at flat index
+          ``alpha = i_0 * 2^{a-1} + i_1 * 2^{a-2} + ... + i_{a-1}``,
+          i.e. axis 0 corresponds to the MSB of the flat index.
+
+        ``holant-tools.non_symmetric`` convention:
+          Bitstrings are tuples ``(b_0, b_1, ..., b_{a-1})`` where
+          ``b_i`` is interpreted as the value at WIRE ``i`` of the
+          matchgate. The internal pullback code iterates with
+          ``b = tuple((mask >> i) & 1 for i in range(arity))``, which
+          puts the LSB of ``mask`` at position 0.
+
+        The bridge: we identify tensor axis ``i`` with matchgate wire
+        ``i``. The bitstring for flat index ``alpha`` (interpreting
+        ``alpha`` MSB-first into the tensor's axis labels) is then the
+        natural tuple ``(b_0, ..., b_{a-1})`` to use with the holant-
+        tools identity functions. So we read the bits of ``alpha`` MSB-
+        first into the bitstring tuple.
+
+        Worked example, arity 4
+        -----------------------
+          flat_index = 0  (binary 0000) -> bitstring (0, 0, 0, 0)
+          flat_index = 5  (binary 0101) -> bitstring (0, 1, 0, 1)
+          flat_index = 13 (binary 1101) -> bitstring (1, 1, 0, 1)
+        """
+        return tuple((flat_index >> (arity - 1 - i)) & 1 for i in range(arity))
+
+    @classmethod
+    def _build_tau_dict(cls,
+                         values: Sequence[float],
+                         arity: int,
+                         ) -> Dict[Tuple[int, ...], float]:
+        """Build a ``{bitstring: value}`` dict in the convention expected
+        by the matchgate-identity functions in ``holant_tools.non_symmetric``.
+
+        ``values`` is the flat length-2^arity array produced by
+        :meth:`transform_signature_general`. Each entry corresponds to
+        one bitstring; the convention bridge between the two packages
+        is handled by :meth:`_flat_index_to_bitstring` (see that
+        method's docstring for the rationale).
+
+        Returns
+        -------
+        Dict[Tuple[int, ...], float]
+            Keys are length-``arity`` tuples of 0s and 1s; values are
+            the corresponding signature entries cast to Python float.
+            The dict has exactly ``2**arity`` entries (one per
+            bitstring; we always build the full tensor here even when
+            some entries are zero, because the matchgate-identity
+            functions expect every key to be present).
+        """
+        return {
+            cls._flat_index_to_bitstring(idx, arity): float(values[idx])
+            for idx in range(2 ** arity)
+        }
+
+    def _check_general_realisability(self,
+                                       values: Sequence[float],
+                                       arity: int,
+                                       ) -> Tuple[Optional[bool], Optional[str]]:
+        r"""Decide whether a general (non-symmetric) length-``2^arity``
+        signature is matchgate-realisable on the STANDARD basis. Returns
+        ``(is_realisable, realisability_check)``.
+
+        See the module-level comment block above this method for the
+        underlying mathematics (parity, Pfaffian identities, augmented-
+        Pfaffian framework, Plücker enumeration); see
+        :class:`HolographicBasisResult`'s ``realisability_check`` field
+        for what each returned name means semantically.
+
+        Tolerance strategy
+        ------------------
+        The matchgate identities are QUADRATIC in the tau values (every
+        term is a product of two tau entries). So the natural absolute
+        magnitude of an identity expression scales as ``max_abs^2``
+        where ``max_abs = max |z'|`` over the signature. A
+        signature-relative tolerance is therefore
+        ``self.tol * max(max_abs^2, 1.0)`` -- the ``max(..., 1.0)``
+        floor keeps the tolerance sane when ``max_abs`` is small (the
+        identity polynomial inherits the same scale).
+
+        Special case: the all-zero signature
+        ------------------------------------
+        A signature whose max-absolute entry falls below ``self.tol``
+        is treated as the GENUINELY-ZERO signature -- it is trivially
+        matchgate-realisable (the empty matchgate produces the zero
+        signature). We short-circuit with ``(True, "deferred")``
+        because the regular check would do meaningless arithmetic on
+        near-zero numbers.
+
+        Parity branches
+        ---------------
+        Standard-basis matchgate signatures vanish on one Hamming-
+        weight parity:
+          - EVEN-parity branch: all entries at odd Hamming weight are
+            zero.
+          - ODD-parity branch: all entries at even Hamming weight are
+            zero (this branch requires the augmented-Pfaffian framework
+            -- the bare Pfaffian on an odd-cardinality subset of a
+            skew-symmetric matrix vanishes, so the odd-parity values
+            need an augmented (n+1)-vertex Kasteleyn matrix to be
+            represented as Pfaffians).
+
+        The check first detects which (if any) parity branch holds for
+        the input, then applies the arity-appropriate identities.
+        Returns ``False`` immediately if neither branch holds (a
+        signature with non-zero entries in BOTH parities cannot be a
+        standard-basis matchgate signature).
+        """
+        # Pre-flight: scale and the special-case zero signature.
+        max_abs = max((abs(v) for v in values), default=0.0)
+        if max_abs < self.tol:
+            # Trivially matchgate-realisable (the empty matchgate
+            # produces the zero signature on any basis). The
+            # "deferred" label signals that we shortcut rather than
+            # running an identity check on near-zero arithmetic.
+            return True, "deferred"
+
+        # Tolerance for the (quadratic) identity expressions. Each
+        # identity term is tau * tau, so absolute magnitude scales as
+        # max_abs^2; we multiply by self.tol to get a relative
+        # threshold. The max(..., 1.0) floor avoids over-tightening for
+        # signatures with small max_abs (where max_abs^2 << max_abs).
+        eff_tol = self.tol * max(max_abs * max_abs, 1.0)
+
+        # Build the {bitstring: value} dict in the convention the
+        # holant-tools identity functions expect.
+        tau = self._build_tau_dict(values, arity)
+
+        def _parity_zero(parity: int) -> bool:
+            """True iff every tau entry whose Hamming-weight parity is
+            ``parity`` (0 = even, 1 = odd) is effectively zero
+            (below ``self.tol * max_abs``).
+
+            For the EVEN-parity branch we require all ODD-weight
+            entries to be zero (so we pass ``parity=1``); for the ODD-
+            parity branch we require all EVEN-weight entries to be
+            zero (``parity=0``).
+            """
+            return all(
+                abs(v) < self.tol * max_abs
+                for b, v in tau.items() if sum(b) % 2 == parity
+            )
+
+        even_branch = _parity_zero(parity=1)       # odd-weight entries zero
+        odd_branch  = _parity_zero(parity=0)       # even-weight entries zero
+
+        # ============================================================
+        # ARITY < 4 : PARITY ONLY (Valiant 2008 Prop 6.1, 6.2)
+        # ============================================================
+        # At arities 1, 2, 3 there are NO matchgate identities beyond
+        # the parity-vanishing condition. So if either parity branch
+        # holds, the signature is matchgate-realisable on the standard
+        # basis. (For arity 0 the only signature is a scalar; both
+        # parity checks trivially hold.)
+        if arity < 4:
+            return (even_branch or odd_branch), "parity_only"
+
+        # ============================================================
+        # ARITY 4 : PARITY + ONE PFAFFIAN IDENTITY PER BRANCH
+        # ============================================================
+        # The matchgate-identity engine ships hand-coded identities
+        # for both parities at arity 4. Even-parity is the classical
+        # 4-pair Pfaffian identity; odd-parity is derived via the
+        # augmented (5x5) Kasteleyn matrix.
+        if arity == 4:
+            import holant_tools as _ht
+
+            # Try the EVEN-parity branch first. We only attempt the
+            # even-parity identity if all odd-weight entries vanish
+            # (otherwise the parity violation alone disqualifies the
+            # signature; running the identity would just confirm the
+            # rejection but with a less-clear meaning).
+            if even_branch:
+                # The identity returns a sympy expression; with numeric
+                # tau values it's a sympy Float (or Python float for
+                # trivial cases). Cast to float for the magnitude test.
+                value = float(_ht.matchgate_identity_arity_4_even(tau))
+                if abs(value) < eff_tol:
+                    return True, "matchgate_identity_arity_4"
+                # Identity violated -> not realisable on this branch.
+
+            # Try the ODD-parity branch (using the augmented-Pfaffian
+            # identity). Both branches can be tried in sequence because
+            # a signature might be all-zero on either parity (in which
+            # case only the OTHER branch is non-trivially testable).
+            if odd_branch:
+                value = float(_ht.matchgate_identity_arity_4_odd(tau))
+                if abs(value) < eff_tol:
+                    return True, "matchgate_identity_arity_4"
+
+            # Neither branch produced a valid match. This covers:
+            #   - parity violated on both branches (the most common
+            #     "obviously not realisable" case)
+            #   - parity holds on one branch but the identity fails
+            #     (a more subtle obstruction the parity check alone
+            #     wouldn't catch)
+            return False, "matchgate_identity_arity_4"
+
+        # ============================================================
+        # ARITY >= 5 : PLÜCKER ENUMERATION + AUGMENTED (EVEN ARITIES)
+        # ============================================================
+        # For arity n >= 5 the matchgate-identity engine provides:
+        #
+        #   matchgate_identities_arity_n_even(tau, n)
+        #       Returns a LIST of polynomials, one per (4-subset of
+        #       positions, even-cardinality remaining-subset) pair. By
+        #       Plücker's classical result this enumeration is COMPLETE
+        #       for the even-parity matchgate variety.
+        #
+        #   matchgate_identities_arity_n_odd(tau, n)
+        #       Same shape but with odd-cardinality remaining-subset.
+        #       This catches one piece of the odd-parity story; the
+        #       augmented weight-1 identity below catches another.
+        #
+        #   matchgate_identity_augmented_weight_1_arity_n_odd(tau, n)
+        #       Single polynomial: Sigma_i (-1)^i tau(e_i) tau(bar e_i)
+        #       where e_i is the i-th unit bitstring. Meaningful only
+        #       at EVEN arities (see same-parity-pair note below).
+        #
+        # We evaluate each identity polynomial at the numeric tau
+        # values and short-circuit on the first one that exceeds
+        # ``eff_tol`` -- if any identity is non-zero, the signature is
+        # not in the matchgate locus.
+        import holant_tools as _ht
+
+        if even_branch:
+            # Plücker enumeration for the even-parity branch. This is
+            # COMPLETE (Plücker's classical Grassmannian result), so a
+            # signature that passes every identity here is genuinely
+            # matchgate-realisable on the standard basis at this arity.
+            for expr in _ht.matchgate_identities_arity_n_even(tau, arity):
+                if abs(float(expr)) > eff_tol:
+                    return False, "plucker_arity_n"
+            return True, "plucker_arity_n"
+
+        if odd_branch:
+            # Standard Plücker enumeration for odd-parity. Catches part
+            # of the odd-parity constraint set.
+            for expr in _ht.matchgate_identities_arity_n_odd(tau, arity):
+                if abs(float(expr)) > eff_tol:
+                    return False, "plucker_arity_n"
+
+            # The augmented weight-1 identity adds further constraint,
+            # but only at EVEN arities. The reason (per the engine's
+            # "same-parity-pair condition" note): the identity pairs
+            # weight-1 entries with weight-(n-1) entries, and both
+            # factors must lie in the same parity branch for the
+            # identity to bite. Weight-1 is always odd; weight-(n-1)
+            # is odd iff (n-1) is odd iff n is even. At odd n, the
+            # second factor has even parity and is identically zero on
+            # the strict odd-parity branch -- making the whole formula
+            # collapse to 0 = 0 (a vacuous identity). We therefore
+            # only apply this identity at even arities.
+            if arity % 2 == 0:
+                expr = _ht.matchgate_identity_augmented_weight_1_arity_n_odd(
+                    tau, arity,
+                )
+                if abs(float(expr)) > eff_tol:
+                    return False, "plucker_arity_n"
+            # At arity 5 odd-parity the standard enumeration alone is
+            # complete (each 4-subset leaves one remaining position,
+            # giving |S|=1 odd identities). At arity >= 6 odd-parity,
+            # this is a tight necessary check but not provably
+            # sufficient -- larger augmented-Pfaffian Plücker
+            # relations (weight-3 x weight-3 pairings, etc.) exist
+            # and are research-grade. Returning True here is the
+            # framework's best-available verdict; consumers should
+            # treat "True" at arity >= 6 odd-parity as "no detected
+            # obstruction" rather than "provably realisable".
+            return True, "plucker_arity_n"
+
+        # Neither parity branch holds: the signature has non-zero
+        # entries at both even AND odd Hamming weights. No matchgate
+        # signature on the standard basis can have this shape (parity
+        # vanishing is necessary at every arity), so we reject.
+        return False, "plucker_arity_n"
+
+    # -----------------------------------------------------------------
+    # Auto-discovery of T (v0.3 + v0.4 -- practical fragment of Cai-Lu's SRP)
     # -----------------------------------------------------------------
     #
     # Cai-Lu 2011 Theorem 2.5 says a symmetric signature is matchgate-
@@ -423,17 +813,186 @@ class HolographicBasisPair:
     # gives a Cai-Gorenstein Theorem-9 form (alternate-zero with the
     # non-zero entries forming a geometric progression).
     #
-    # The v0.3 implementation here ships a PRACTICAL search:
-    #   (1) try a list of canonical bases (identity, Hadamard, shears,
-    #       coordinate swap);
-    #   (2) if none work, parameterise T = [[1, t], [u, v]] and do a
-    #       2-D coarse grid search, refining the best candidate with a
-    #       few Newton-style polishing iterations.
+    # The v0.3 + v0.4 implementation ships a PRACTICAL search in
+    # increasing-cost order:
+    #   (0) v0.4 closed-form shortcut: when the recurrence has real
+    #       roots and the arity is even, derive T directly from the
+    #       roots via T = [[r_2, -1], [-r_1, 1]]. This sends the
+    #       polynomial encoding A*(u+r_1*v)^n + B*(u+r_2*v)^n to
+    #       (r_2-r_1)^n * (A*u^n + B*v^n), which is matchgate-standard
+    #       even-parity form for even n. See
+    #       :meth:`_basis_from_recurrence_kernel`.
+    #   (1) v0.3 canonical bases: try a list (identity, Hadamard, swap,
+    #       shears, rotation_4). Cheap and catches the most common
+    #       "well-conditioned" cases.
+    #   (2) v0.3 parameterised grid: parameterise T = [[1, t], [u, v]]
+    #       and do a 3-D coarse grid search over (t, u, v) in the
+    #       [-2, +2] range, refining the best candidate via coordinate-
+    #       descent polish.
+    #
+    # The closed-form shortcut (step 0, new in v0.4) catches signatures
+    # whose recurrence roots lie OUTSIDE the [-2, +2] grid the v0.3
+    # search explores -- a documented failure mode of the v0.3
+    # implementation. Even-arity signatures with two distinct real
+    # roots are now handled in O(1) without any search.
     #
     # When the signature does not satisfy the order-2 recurrence,
     # discover_basis() returns (None, None) -- no basis can rescue it
     # (Cai-Lu Thm 2.5).
     # -----------------------------------------------------------------
+
+    @staticmethod
+    def _basis_from_recurrence_kernel(a: float,
+                                        b: float,
+                                        c: float,
+                                        *,
+                                        tol: float = 1e-12,
+                                        ):
+        r"""Derive a closed-form basis matrix T from the order-2
+        recurrence kernel ``(a, b, c)`` of a symmetric signature
+        satisfying ``a*z_k + b*z_{k+1} + c*z_{k+2} = 0``. Returns a
+        ``(2, 2)`` numpy array, or ``None`` if no real closed-form
+        derivation applies.
+
+        The mathematics
+        ---------------
+        A signature satisfying the recurrence has the closed form
+
+            z_k = A * r_1^k + B * r_2^k
+
+        where ``r_1, r_2`` are the roots of the characteristic
+        polynomial ``c*x^2 + b*x + a = 0`` and ``A, B`` are determined
+        by the initial conditions.
+
+        In ``transform_signature``'s polynomial encoding (the
+        convention this module's substitution rule produces in
+        practice -- ``z_k`` is the coefficient at ``u^k * v^{n-k}``
+        divided by ``C(n, k)``), this corresponds to
+
+            P(u, v) = A * (r_1*u + v)^n + B * (r_2*u + v)^n.
+
+        Applying the basis substitution induced by
+
+            T = [[1, -r_2], [1, -r_1]]
+
+        (i.e. ``u_orig -> u + v``, ``v_orig -> -r_2*u - r_1*v``) sends:
+
+            (r_1*u_orig + v_orig) -> (r_1 - r_2)*u_new      (pure u)
+            (r_2*u_orig + v_orig) -> (r_2 - r_1)*v_new      (pure v)
+
+        So the transformed polynomial is
+
+            P_new(u, v) = A*(r_1-r_2)^n * u^n
+                        + B*(-(r_1-r_2))^n * v^n.
+
+        The transformed signature (in this module's encoding) is
+        therefore ``[K*B*(-1)^n, 0, 0, ..., 0, K*A]`` with
+        ``K = (r_1 - r_2)^n`` -- only ``z'_0`` and ``z'_n`` are
+        non-zero.
+
+        For EVEN arity ``n``, this is matchgate-standard EVEN-parity
+        form (positions 0 and n are both even Hamming-weight). For
+        ODD arity, position n is odd Hamming-weight so the result has
+        entries at mixed parities and is NOT matchgate-standard. The
+        caller falls through to the search.
+
+        When this method returns None
+        -----------------------------
+        Three degenerate cases yield ``None`` (the caller should fall
+        through to the existing search):
+
+          1. ``|c| < tol``: the recurrence is effectively order-1 or
+             trivial; the characteristic polynomial isn't quadratic.
+          2. Discriminant ``b^2 - 4ac < -tol``: complex roots. The
+             closed-form T would have complex entries; matchgate
+             theory is defined over the reals here, so we don't try.
+          3. ``|r_1 - r_2| < tol``: a double root means the two linear
+             forms in the polynomial encoding coincide, the
+             decomposition ``z_k = A*r_1^k + B*r_2^k`` degenerates,
+             and the basis T would be singular
+             (``det T = -r_1 + r_2 = r_2 - r_1``, vanishing iff
+             ``r_1 = r_2``).
+
+        Parameters
+        ----------
+        a, b, c : float
+            Coefficients of the order-2 recurrence (typically
+            obtained from ``_matchgate_realisable``'s SVD kernel
+            vector).
+        tol : float
+            Numerical tolerance for the three degeneracy checks. Use
+            the class's ``self.tol`` when calling from inside a
+            method; the default here is conservative.
+
+        Returns
+        -------
+        np.ndarray of shape (2, 2) or None
+            The closed-form basis matrix, or None if the kernel is
+            degenerate / has complex roots.
+        """
+        import numpy as np
+        a_f, b_f, c_f = float(a), float(b), float(c)
+
+        # Special case: degenerate quadratic from a RANK-1 signature.
+        # When SVD operates on the recurrence-Hankel matrix of a
+        # genuinely rank-1 signature (z_k = K*r^k), the kernel space
+        # is 2-dimensional within R^3 and SVD may pick any kernel
+        # direction. The most common picks are:
+        #   - (a, b, 0)   -- the order-1 recurrence a*z_k + b*z_{k+1} = 0
+        #                    (with r = -a/b), or
+        #   - (0, b, c)   -- z_{k+1} + (c/b)*z_{k+2} = 0 (a-free).
+        # Both correspond to rank-1 with single root. We derive T
+        # directly:
+        #
+        #     P_orig = K * (r*u + v)^n
+        #
+        # is sent to a pure-u^n form by T = [[1, 0], [1, -r]] (using
+        # this module's substitution convention). The transformed
+        # signature is [0, 0, ..., 0, K*r^n] -- single non-zero at
+        # position n, matchgate-standard for both even and odd arity.
+        #
+        # We extract the single root r from whichever degenerate
+        # direction SVD returned: c=0 gives r = -a/b; a=0 gives
+        # r = -b/c. The two formulas agree when both a*c and the
+        # signature are consistent with rank-1.
+        if abs(c_f) < tol:
+            # (a, b, 0)-style kernel -- order-1 recurrence z_{k+1}
+            # = r*z_k with r = -a/b.
+            if abs(b_f) < tol:
+                return None                   # truly trivial kernel
+            r_single = -a_f / b_f
+            return np.array([[1.0, 0.0], [1.0, -r_single]], dtype=float)
+        if abs(a_f) < tol:
+            # (0, b, c)-style kernel -- the recurrence is z_{k+1}
+            # + (c/b)*z_{k+2} = 0 i.e. z_{k+2} = -(b/c)*z_{k+1}, an
+            # order-1 relation on z_1..z_n with root r = -b/c.
+            r_single = -b_f / c_f
+            return np.array([[1.0, 0.0], [1.0, -r_single]], dtype=float)
+
+        # Compute the characteristic-polynomial discriminant.
+        # c*x^2 + b*x + a has discriminant b^2 - 4*a*c.
+        disc = b_f * b_f - 4.0 * a_f * c_f
+
+        # Case 2: complex roots. The closed-form T would have complex
+        # entries; we don't attempt this in v0.4. Fall through.
+        # Use a small negative tolerance to be safe with floating-
+        # point inputs near disc = 0.
+        if disc < -tol:
+            return None
+
+        # Real (possibly equal) roots via the standard formula.
+        # max(disc, 0) protects against tiny negative numerical
+        # discriminants near zero.
+        sqrt_disc = np.sqrt(max(disc, 0.0))
+        r_1 = (-b_f + sqrt_disc) / (2.0 * c_f)
+        r_2 = (-b_f - sqrt_disc) / (2.0 * c_f)
+
+        # Case 3: double root. r_1 == r_2 means the two linear forms
+        # in the polynomial encoding coincide and T becomes singular.
+        if abs(r_1 - r_2) < tol:
+            return None
+
+        return np.array([[1.0, -r_2], [1.0, -r_1]], dtype=float)
 
     @staticmethod
     def _matchgate_standard_distance(values, tol: float = 1e-9) -> float:
@@ -464,6 +1023,46 @@ class HolographicBasisPair:
         vn = v / vmax
 
         def _parity_distance(zero_positions, nonzero_positions):
+            r"""Distance of the sub-sequence at ``nonzero_positions`` from
+            a Cai-Gorenstein-form geometric progression, plus the cost
+            of the supposedly-zero entries at ``zero_positions``.
+
+            The Cai-Gorenstein matchgate-standard form for the EVEN
+            arity case is z_{2j} = 2 * a^{n-2j} * b^{2j}. This admits
+            three regimes:
+
+              (i)  generic (both a, b non-zero): every position in
+                   ``nonzero_positions`` has a non-zero value AND
+                   consecutive ratios agree (the geometric
+                   progression);
+              (ii) ``b = 0`` degenerate: only the first position
+                   (z_0) is non-zero, all the rest are zero -- this
+                   is the "leading non-zero with trailing zeros"
+                   pattern;
+              (iii) ``a = 0`` degenerate: only the LAST position
+                   (z_n) is non-zero, all the rest are zero -- the
+                   "trailing non-zero with leading zeros" pattern.
+
+            All three are LEGITIMATE matchgate-standard forms. The
+            old implementation conflated regimes (ii) and (iii) with
+            "interior zero breaks the geometric progression" and
+            penalised them incorrectly. v0.4 fix: distinguish TRUE
+            interior zeros (strictly between the first and last
+            non-zero entry) from LEADING / TRAILING zeros (before the
+            first or after the last non-zero entry) -- the former
+            break the GP, the latter are fine.
+
+            Why interior zeros are bad
+            --------------------------
+            For a GP with non-zero a and b: ALL even-indexed entries
+            are non-zero (z_{2j} = 2*a^{n-2j}*b^{2j} != 0 for all j
+            when a, b != 0). An interior zero (say z_2 = 0 with
+            z_0 != 0 and z_4 != 0) means the progression has a hole,
+            which Cai-Gorenstein form forbids. This also matches the
+            matchgate-identity story: a signature like [16, 0, 0, 0, 16]
+            (arity 4) fails the matchgate identity (16*16 - 0 + 0 - 0
+            = 256 != 0), so it's genuinely not matchgate-realisable.
+            """
             cost = float(sum(vn[i] ** 2 for i in zero_positions))
             nz = [float(vn[i]) for i in nonzero_positions]
             if all(abs(x) < tol for x in nz):
@@ -471,22 +1070,41 @@ class HolographicBasisPair:
                 # effectively zero on this parity -- combined with the
                 # zero-positions cost gives the right answer.
                 return cost
-            # Interior-zero on a supposed-nonzero position breaks the
-            # geometric progression.
-            for x in nz:
-                if abs(x) < tol:
+
+            # Find the first and last non-zero indices within `nz`.
+            # Leading entries (before `first`) and trailing entries
+            # (after `last`) are allowed to be zero -- those are the
+            # b=0 / a=0 Cai-Gorenstein degenerate cases. ONLY entries
+            # strictly between `first` and `last` count as interior
+            # zeros that break the geometric progression.
+            present = [j for j, x in enumerate(nz) if abs(x) >= tol]
+            first, last = present[0], present[-1]
+
+            # Penalise TRUE interior zeros (strictly between first
+            # and last non-zero).
+            for j in range(first + 1, last):
+                if abs(nz[j]) < tol:
                     cost += 1.0
-            # Geometric-progression deviation: consecutive log-ratios
-            # should agree.
-            if len(nz) >= 2:
-                ratios = []
-                for j in range(len(nz) - 1):
-                    if abs(nz[j]) < tol:
-                        ratios.append(float("inf"))
-                    else:
-                        ratios.append(nz[j + 1] / nz[j])
-                mean_ratio = float(np.mean(ratios))
-                cost += float(sum((r - mean_ratio) ** 2 for r in ratios))
+
+            # Geometric-progression check on the consecutive non-zero
+            # range [first, last]. If only one non-zero entry
+            # (first == last), the GP is trivial and cost is just the
+            # zero-positions contribution (plus any interior-zero
+            # penalty -- which would be zero since there's no
+            # interior to check).
+            if last > first:
+                active = nz[first:last + 1]
+                # If interior zeros remain in `active` (which means
+                # we already counted them above), the ratios below
+                # would explode. Bail with the already-accumulated
+                # cost; the interior-zero penalty already conveys
+                # the obstruction.
+                if all(abs(x) >= tol for x in active):
+                    ratios = [active[i + 1] / active[i]
+                              for i in range(len(active) - 1)]
+                    mean_ratio = float(np.mean(ratios))
+                    cost += float(sum((r - mean_ratio) ** 2
+                                       for r in ratios))
             return cost
 
         even_positions = list(range(0, n + 1, 2))
@@ -555,6 +1173,38 @@ class HolographicBasisPair:
             return (result is not None
                      and self._matchgate_standard_distance(result.values)
                           < success_tol)
+
+        # Step 1.5 (v0.4): closed-form shortcut via the recurrence
+        # kernel. The realisability gate above already gave us the
+        # kernel (a, b, c) such that a*z_k + b*z_{k+1} + c*z_{k+2} = 0.
+        # When that kernel has real, distinct roots AND the arity is
+        # even, T = [[r_2, -1], [-r_1, 1]] sends the signature directly
+        # to matchgate-standard EVEN-parity form (see
+        # :meth:`_basis_from_recurrence_kernel`). This catches the
+        # signatures whose roots lie OUTSIDE the [-2, +2] grid the
+        # subsequent search explores -- a documented failure mode of
+        # the v0.3 implementation.
+        #
+        # We try the closed-form here, BEFORE the canonical-bases
+        # sweep, because:
+        #   (a) when it applies, it's exact (no numerical search),
+        #   (b) it's free -- a single 2x2 matrix construction,
+        #   (c) it has no failure mode on the cases it handles, so
+        #       it never wastes work via a near-miss.
+        # If the closed-form returns None (complex roots, double
+        # root, odd arity that doesn't simplify), or if the resulting
+        # T doesn't actually land in matchgate-standard form (which
+        # can happen for the unbalanced-amplitudes case A != B), we
+        # fall through to the canonical-bases search.
+        kernel = id_result.recurrence_coefficients
+        if kernel is not None and len(kernel) >= 3:
+            T_closed = self._basis_from_recurrence_kernel(
+                kernel[0], kernel[1], kernel[2], tol=self.tol,
+            )
+            if T_closed is not None:
+                r = _try(T_closed)
+                if _matches(r):
+                    return T_closed, r
 
         # Step 2: canonical candidates.
         sqrt2_inv = 1.0 / np.sqrt(2.0)
@@ -799,19 +1449,39 @@ class HolographicBasisResult:
       values: the transformed signature values. For symmetric inputs
         this is ``[z'_0, ..., z'_n]`` of length n+1; for general inputs
         this is a flat length-2^arity array indexed by bitstrings.
-      is_realisable: For SYMMETRIC results: True iff the transformed
-        signature satisfies the Cai-Lu 2011 order-2 recurrence
-        (matchgate-realisable). For GENERAL results: None (the MGI
-        check on a 2^a-dim tensor is a v0.4 deliverable).
-      recurrence_coefficients: when realisable, the (a, b, c) kernel
-        vector such that a z'_k + b z'_{k+1} + c z'_{k+2} = 0; None
-        otherwise.
+      is_realisable: True iff the transformed signature is matchgate-
+        realisable on the standard basis. For SYMMETRIC results: based
+        on the Cai-Lu 2011 order-2 recurrence (Theorem 2.5). For
+        GENERAL results: based on parity plus the matchgate identities
+        from ``holant_tools.non_symmetric`` (v0.4). ``None`` only when
+        the check is deferred (e.g., an unsupported arity).
+      recurrence_coefficients: when realisable (symmetric only), the
+        (a, b, c) kernel vector such that a z'_k + b z'_{k+1} +
+        c z'_{k+2} = 0; None otherwise.
       basis_matrix: the 2x2 matrix T applied.
+      realisability_check: name of the check that produced
+        ``is_realisable``. One of:
+          - ``"order_2_recurrence"`` — symmetric path via Cai-Lu Thm 2.5.
+          - ``"parity_only"`` — general arity < 4 (Valiant 2008
+            Propositions 6.1, 6.2 — no matchgate identities exist
+            beyond parity below arity 4).
+          - ``"matchgate_identity_arity_4"`` — general arity 4 via the
+            Grassmann-Pluecker (even parity) and augmented-Pfaffian
+            (odd parity) identities. Sufficient check.
+          - ``"plucker_arity_n"`` — general arity >= 5 via the standard
+            Plücker enumeration plus, for even arities, the augmented
+            weight-1 identity. Complete for even-parity arity-5; a
+            tight necessary check (but not provably sufficient) at
+            arity >= 6 odd-parity.
+          - ``"deferred"`` — the check was skipped (e.g., the values
+            are all near-zero so the question is degenerate).
+          - ``None`` — no check applicable (e.g., bare construction).
     """
     values: List[float]
     is_realisable: Optional[bool]
     recurrence_coefficients: Optional[Any]
     basis_matrix: Any
+    realisability_check: Optional[str] = None
 
 
 @dataclasses.dataclass

@@ -6,6 +6,252 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 once it reaches v1.0.0; until then, the v0.x API may shift between minor
 versions.
 
+## [0.4.0a1] — 2026-05-31 (v0.4 alpha — MGI + Lipton-Tarjan + SRP closed-form)
+
+**v0.4 closes the three open items from the v0.3 "out of scope" list:
+matchgate-identity (MGI) realisability checking for general
+(non-symmetric) signatures, Lipton-Tarjan auto-discovery of planar
+separators, and a closed-form fragment of the Cai-Lu SRP search that
+catches signatures whose recurrence roots lie outside the v0.3 grid
+range.** 262 tests pass (up from 229 in v0.3; +33 new tests across
+the three deliverables). Honest-scope limitations are documented per
+deliverable below.
+
+### Deliverable 1: MGI for general (non-symmetric) signatures
+
+The matchgate-identity (MGI) realisability check on general
+(non-symmetric) signatures is now wired through
+`transform_signature_general`, populating
+`HolographicBasisResult.is_realisable` (no longer `None` for general
+inputs) and the new `realisability_check` field that names which
+identity was applied.
+
+### Matchgate-identity wiring (compose.py)
+- `HolographicBasisResult` gained a `realisability_check: Optional[str]`
+  field naming the check that produced `is_realisable`. Values:
+  `"order_2_recurrence"` (symmetric path via Cai-Lu Thm 2.5),
+  `"parity_only"` (general arity < 4 -- Valiant 2008 Prop 6.1, 6.2),
+  `"matchgate_identity_arity_4"` (general arity 4 via the
+  Grassmann-Pluecker even-parity identity and the augmented-Pfaffian
+  odd-parity identity), `"plucker_arity_n"` (general arity >= 5 via
+  the Plücker enumeration plus, for even arities, the augmented
+  weight-1 identity), `"deferred"` (the genuinely-zero signature
+  shortcut).
+- `HolographicBasisPair.transform_signature_general` now calls a new
+  private `_check_general_realisability` method after the tensor
+  contraction. The check delegates to `holant_tools.non_symmetric`'s
+  identity functions:
+    * `matchgate_identity_arity_4_even` / `matchgate_identity_arity_4_odd`
+      for arity 4;
+    * `matchgate_identities_arity_n_even` /
+      `matchgate_identities_arity_n_odd` plus, for even arities,
+      `matchgate_identity_augmented_weight_1_arity_n_odd` for arity >= 5.
+- New helpers `_flat_index_to_bitstring` and `_build_tau_dict`
+  bridge the bitstring-convention mismatch between structural-computing
+  (axis 0 = MSB of flat index after `tensor.reshape((2,)*a)`) and
+  holant-tools (LSB-first via `(mask >> i) & 1`).
+- Scale-invariant tolerance: identities are compared against
+  `self.tol * max(max_abs^2, 1.0)` since each identity term is
+  quadratic in tau values.
+
+### Orchestrator (orchestrator.py)
+- `_holographic_transform_general_leaf` returns the new
+  `is_realisable` and `realisability_check` fields alongside the
+  transformed `values`, `arity`, and `basis_matrix`.
+
+### Tests (tests/test_compose.py, tests/test_orchestrator.py)
+- 10 new tests in `test_compose.py` covering: symmetric arity-4 even-
+  parity matchgate-realisable case (z_2^2 = z_0*z_4); perturbation
+  rejection; zero signature; symmetric arity-4 odd-parity (vacuous-on-
+  symmetric noted); asymmetric arity-4 odd-parity rejection via the
+  augmented-Pfaffian identity; arity-2 parity-only positive + negative;
+  arity-5 Plücker zero signature; arity-5 random rejection; basis
+  transformation changing realisability (3-AND under Hadamard
+  illustrating the standard-vs-some-basis distinction).
+- 1 new test in `test_orchestrator.py` verifying the leaf surfaces
+  the new fields end-to-end on a symmetric matchgate-realisable
+  arity-4 even-parity signature.
+- Updated 1 existing v0.3 contract test
+  (`test_transform_general_is_realisable_is_none_for_general` ->
+  `test_transform_general_realisability_populated_by_mgi_check`)
+  to assert the new behaviour.
+- All 233 existing tests still pass; total now ~244.
+
+### Honest scope (v0.4)
+- The check answers "is the TRANSFORMED signature matchgate-realisable
+  on the STANDARD basis?" -- a stricter criterion than the symmetric
+  API's "realisable on SOME basis" check via Cai-Lu Thm 2.5.
+- For arity >= 6 ODD-parity, the Plücker enumeration plus the
+  augmented weight-1 identity is a TIGHT NECESSARY check but not
+  provably sufficient. Further augmented-Pfaffian Plücker relations
+  (weight-3 x weight-3 pairings, etc.) are research-grade and
+  deferred. For arity 4 (both parities) and arity 5 (even parity is
+  Plücker-complete; odd parity is covered by the standard
+  enumeration), the check is sufficient.
+
+**Deliverable 3 (SRP search polish) — complete.** A closed-form
+derivation of the basis matrix from the order-2 recurrence kernel
+is now tried BEFORE the canonical-bases sweep in `discover_basis`,
+catching rank-1 signatures whose root lies outside the v0.3 grid
+search's `[-2, +2]` range -- a documented failure mode.
+
+### SRP search closed-form (compose.py)
+- New static method `HolographicBasisPair._basis_from_recurrence_kernel(a, b, c)`
+  returning T = [[1, -r_2], [1, -r_1]] for distinct real roots of
+  c*x^2 + b*x + a = 0, or a rank-1 form T = [[1, 0], [1, -r]] when
+  the kernel is degenerate (c=0 or a=0, indicating an order-1
+  recurrence from a rank-1 signature). Returns None for complex
+  roots, double roots, and truly trivial kernels -- the caller then
+  falls through to the v0.3 canonical-bases-and-grid search.
+- `discover_basis` now tries the closed-form T immediately after
+  the realisability gate, before the canonical-bases sweep. When
+  the closed-form lands within the matchgate-standard tolerance, it
+  returns the basis directly -- no search required.
+- `_matchgate_standard_distance` was fixed to correctly handle the
+  Cai-Gorenstein degenerate cases a=0 (only z_n non-zero) and b=0
+  (only z_0 non-zero): leading / trailing zeros in the non-zero-
+  position subsequence are now allowed, while TRUE interior zeros
+  (strictly between the first and last non-zero) still break the
+  geometric progression. Without this fix, single-point matchgate-
+  standard signatures produced by the closed-form would be
+  incorrectly rejected.
+
+### Tests
+- 5 new tests in `test_compose.py`:
+  * `test_srp_closed_form_finds_rank1_basis_outside_v03_grid`: 8
+    rank-1 signatures with roots in `{5, 10, -7, 3, 100, 0.5, -3}`
+    spanning arities 3-5, all discovered via the closed-form.
+  * `test_srp_closed_form_handles_negative_and_fractional_roots`:
+    50 random rank-1 signatures with roots in `[-15, +15]`,
+    arities 3-5 -- all discovered.
+  * `test_srp_rank2_correctly_returns_none_when_no_basis_exists`:
+    a genuinely rank-2 signature (z_k = 5^k + 7^k) correctly fails
+    to find a matchgate-standard basis (no such basis exists in
+    any 2x2 GL_2).
+  * `test_srp_closed_form_skipped_for_complex_roots`: NAE-3 [0, 1,
+    1, 0] (complex roots) falls through correctly to the existing
+    Hadamard candidate.
+  * `test_basis_from_recurrence_kernel_degenerate_cases`: direct
+    tests of the helper's case-by-case returns.
+- Updated 1 existing v0.3 test
+  (`test_discover_basis_returns_none_for_degenerate_single_cube` ->
+  `test_discover_basis_finds_single_cube_via_v04_closed_form`) to
+  reflect that the v0.3 limitation has been fixed.
+
+### Honest scope (v0.4)
+- The closed-form catches RANK-1 signatures whose root lies anywhere
+  in the real line, AND rank-2 signatures whose roots are real and
+  distinct. The v0.3 search's `[-2, +2]` grid no longer constrains
+  reach.
+- Rank-2 signatures with COMPLEX roots fall through to the v0.3
+  canonical-bases search (Hadamard typically suffices for the
+  common cases like NAE-3).
+- Genuinely matchgate-rank-2 signatures (A != 0 AND B != 0 in the
+  z_k = A*r_1^k + B*r_2^k decomposition, with A != ±B) have no
+  basis that produces matchgate-standard form -- the search
+  correctly returns None for these.
+
+**Deliverable 2 (Lipton-Tarjan auto-separator) — complete.** The
+`PlanarSeparator` class gained an `auto=True` mode that discovers
+the partition `(S, A, B)` via the simple case of Lipton-Tarjan 1979
+when `decompose()` is called. No user-supplied separator is needed
+for planar graphs that the simple case handles.
+
+### Lipton-Tarjan implementation (decompose.py)
+- New private function `_lipton_tarjan_separator(problem)` implementing
+  the simple case of Lipton-Tarjan 1979: BFS-layer from any root,
+  find a level `L_t` whose size is at most `2*sqrt(2*|V|)` and where
+  the levels above and below each carry at most `2|V|/3` vertices.
+  Returns `(S, A, B)` partitioning the vertex set with no direct
+  A-B edge. The guarantees `|S| <= 2*sqrt(2*|V|)` and `|A|, |B| <=
+  2|V|/3` follow from the theorem.
+- Disconnected inputs and graphs where the simple case fails (fat
+  middle level) honestly raise `ValueError`. The full spanning-tree-
+  fundamental-cycle backup is deferred to v0.5.
+- `PlanarSeparator.__init__` now accepts `auto: bool = False`. When
+  True, the `separator/side_a/side_b` arguments may be omitted; they
+  are computed by `_lipton_tarjan_separator` in `decompose()`. The
+  v0.3 manual-mode API is preserved unchanged.
+- `decompose()` re-discovers the separator on every call when in
+  auto mode, so a single instance can be reused across multiple
+  graphs.
+
+### Orchestrator (orchestrator.py)
+- Phase 4.8 now accepts `hints["planar_separator"] = "auto"` as
+  shorthand for `PlanarSeparator(auto=True)`. The existing dict
+  form `{"separator": ..., "side_a": ..., "side_b": ...}` continues
+  to work. The auto-discovered separator size is recorded in the
+  `reductions_applied` list (e.g.
+  `"PlanarSeparator(auto, |S|=3)"`).
+- The `evaluate()` docstring's Phase 4.8 description updated to
+  document both hint forms.
+
+### Tests
+- 11 new tests in `test_decompose.py`:
+  * `test_lipton_tarjan_partition_is_valid_on_grids`: partition
+    properties (cover, disjoint, no direct A-B edge) on grids
+    3x3 through 6x6.
+  * `test_lipton_tarjan_size_bound_holds_on_grids`: `|S| <= 2*sqrt(2|V|)`
+    on grids up to 8x8.
+  * `test_lipton_tarjan_balanced_sides_on_grids`: `|A|, |B| <= 2|V|/3`
+    on grids 4x4 through 8x8.
+  * `test_lipton_tarjan_handles_k4`: K_4 (small planar graph).
+  * `test_lipton_tarjan_handles_cycles`: C_4 through C_10.
+  * `test_lipton_tarjan_disconnected_raises`: honest-stop on
+    disconnected graphs.
+  * `test_lipton_tarjan_trivial_small_graph`: n < 3 trivial case.
+  * `test_planar_separator_auto_mode_round_trip_on_grids`: end-to-end
+    matching count matches brute force on a 4x4 grid.
+  * `test_planar_separator_auto_round_trip_on_cycles`: C_4, C_6.
+  * `test_planar_separator_auto_re_discovers_per_call`: single
+    auto-instance reused on multiple graphs.
+  * `test_planar_separator_auto_mode_constructor_validation`:
+    auto=False without sets raises; auto=True without sets is fine.
+- 2 new tests in `test_orchestrator.py` covering the
+  `hints["planar_separator"] = "auto"` shorthand.
+- All 249 prior tests still pass; total now ~262.
+
+### Honest scope (v0.4)
+- The simple case of Lipton-Tarjan handles MOST practical planar
+  graphs (grids, geometric meshes, dependency graphs).
+- Adversarial planar graphs with a "fat middle level" require the
+  spanning-tree fundamental-cycle backup case, which has corner
+  cases (non-cellular embeddings on disconnected residuals,
+  degenerate fundamental cycles) that aren't yet implemented. The
+  function honestly raises `ValueError` for these inputs; the
+  caller should fall back to manual-mode `PlanarSeparator(separator=
+  ..., side_a=..., side_b=...)`.
+- Disconnected inputs are explicitly rejected -- Lipton-Tarjan
+  requires connectivity.
+
+### Package metadata
+- Version bumped to `0.4.0a1` in `pyproject.toml`,
+  `structural_computing/__init__.py`, and the smoke test.
+- `holant-tools` dependency floor remains `>=0.5.0` (the MGI engine
+  functions are available from holant-tools v0.4.0 stable, but
+  v0.5.0 is the currently-tested target).
+
+### Cumulative state
+- 262 tests passing (229 v0.3 baseline + 33 new across the three
+  deliverables).
+- Public API surface unchanged at the export level -- additions are
+  internal helpers + new fields on existing dataclasses
+  (`HolographicBasisResult.realisability_check`) + new keyword
+  argument on `PlanarSeparator.__init__` (`auto=False`).
+
+### Deferred to v0.5+
+- Full Cai-Lu §4 d-admissibility for general signatures
+  (d-dimensional solution subvarieties at arity >= 6 odd-parity).
+- Lipton-Tarjan spanning-tree fundamental-cycle backup for
+  "fat middle level" planar graphs.
+- Closed-form SRP for rank-2 signatures with complex roots (NAE-3-
+  like cases that currently rely on the Hadamard canonical
+  candidate).
+- Wrapper consolidation: `StructuralComputer` delegating fully
+  through `Orchestrator.evaluate(...)`.
+- PyPI publication of v0.4.0a1 (gating step for
+  `structural-computing-bench`'s release).
+
 ## [0.3.0a1] — 2026-05-28 (v0.3 alpha — calibration + holographic + closure)
 
 **v0.3 closes the calibration loop, ships the holographic toolkit, and

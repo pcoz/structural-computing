@@ -103,16 +103,26 @@ layer for users widening the in-family boundary.
 
 ## Status
 
-**Alpha** (v0.3.0a1). API may still shift before v1.0, but the public
-surface is now stable enough for downstream prototyping. 229 tests
-across ~14 test modules pass; the orchestrator handles all three
+**Alpha** (v0.4.0a1). API may still shift before v1.0, but the public
+surface is now stable enough for downstream prototyping. 262 tests
+across ~15 test modules pass; the orchestrator handles all three
 problem types (graphs / constraint sets / signatures) with full
 provenance, including non-symmetric signatures via the general
 tensor-power holographic transform. The reductions / compositions /
 recursive-decomposition layer ships real Cai-Gorenstein and Cai-Lu
 constructions, not placeholders -- every v0.2-era `NotImplementedError`
-stub is now a working primitive. See [CHANGELOG.md](CHANGELOG.md) for
-what's in this release and what's coming.
+stub is now a working primitive, and v0.4 closes the three open items
+from v0.3's "out of scope" list:
+
+- **Matchgate-identity (MGI) realisability checking** for general
+  (non-symmetric) signatures via `holant_tools.non_symmetric`.
+- **Lipton-Tarjan auto-discovery** of planar separators via
+  `PlanarSeparator(auto=True)`.
+- **Closed-form SRP** for symmetric signatures whose recurrence roots
+  lie outside the v0.3 grid range.
+
+See [CHANGELOG.md](CHANGELOG.md) for what's in this release and what's
+coming.
 
 Companion repo
 [`structural-computing-bench`](https://github.com/pcoz/structural-computing-bench)
@@ -248,10 +258,13 @@ The reductions / compositions / decompositions layer is the framework's
 - `TreewidthBoundedDP` — full Bodlaender-style multi-bag DP for matching
   count on bounded-treewidth graphs.
 
-Still-sketches with `NotImplementedError` (v0.3 roadmap):
-`Projection`, `BranchSum`, `PlanarSeparator`, `RecursiveCircuitCut`,
-auto-discovery of T in `HolographicBasisPair` (full Cai-Lu SRP
-algorithm), non-symmetric `HolographicBasisPair`.
+As of v0.3, every `NotImplementedError` sketch from earlier releases
+is shipped as a real construction (`Projection`, `BranchSum`,
+`PlanarSeparator`, `RecursiveCircuitCut`, `transform_signature_general`
+for non-symmetric `HolographicBasisPair`, `discover_basis` /
+`discover_common_basis` for Cai-Lu SRP). As of v0.4, the realisability
+verdict on non-symmetric signatures and the Lipton-Tarjan auto-mode
+on `PlanarSeparator` are wired through too.
 
 See the full API reference at the worked-examples repo:
 [`docs/reference/`](https://github.com/pcoz/free-fermion-quantum-simulation/tree/main/docs/reference).
@@ -374,24 +387,33 @@ If you use this package in published work, please cite:
 
 ```
 Edward Chalk (sapientronic.ai). "structural-computing: declarative
-structural computation in Python." Version 0.3.0a1, 2026.
+structural computation in Python." Version 0.4.0a1, 2026.
 https://github.com/pcoz/structural-computing
 ```
 
 ## Roadmap
 
-- **v0.3.0a1** (current): closes the calibration loop (route's `cost`
-  field is `log2(seconds)` when calibrated, with `cost_unit` meter
-  always present), ships the holographic toolkit
+- **v0.3.0a1**: closed the calibration loop (route's `cost` field is
+  `log2(seconds)` when calibrated, with `cost_unit` meter always
+  present), shipped the holographic toolkit
   (`HolographicBasisPair.transform_signature_general` for non-symmetric
   signatures, `discover_basis` + `discover_common_basis` for Cai-Lu
-  SRP single- and multi-signature), and fills in every v0.2-era
+  SRP single- and multi-signature), and filled in every v0.2-era
   `NotImplementedError` sketch (`Projection`, `BranchSum`,
   `PlanarSeparator`, `RecursiveCircuitCut`). 229 tests passing.
-- **v0.4.0** (next): Matchgate-Identity (MGI) realisability check for
-  general (non-symmetric) signatures on the 2^a-dim tensor;
-  auto-detection of Lipton-Tarjan separators for `PlanarSeparator`;
-  long-tail polish for the SRP search.
+- **v0.4.0a1** (current): closes the three open items from v0.3.
+  Matchgate-identity (MGI) realisability check for general
+  (non-symmetric) signatures on the 2^a-dim tensor (engine functions
+  in `holant_tools.non_symmetric` wired through
+  `transform_signature_general`); `PlanarSeparator(auto=True)` mode
+  invoking the simple case of Lipton-Tarjan 1979; closed-form SRP
+  shortcut catching rank-1 signatures whose recurrence roots lie
+  outside the v0.3 search's `[-2, +2]` grid. 262 tests passing.
+- **v0.5.0** (next): full Cai-Lu §4 d-admissibility (general-signature
+  realisability cases at arity >= 6 odd-parity); Lipton-Tarjan
+  spanning-tree fundamental-cycle backup for "fat middle level"
+  planar graphs; closed-form SRP for rank-2 signatures with complex
+  roots.
 - **v1.0.0**: API stability contract; production-ready for downstream
   packages.
 

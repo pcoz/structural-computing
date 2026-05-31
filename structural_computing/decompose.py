@@ -30,6 +30,7 @@ The full set of planned decompositions lives in
 admissibility-geometry/proposals/reductions_compositions_recursive_decomposition.md.
 """
 import dataclasses
+import math
 from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence, Set, Tuple
 
 
@@ -464,14 +465,230 @@ def _build_multibag_plan(problem: Any, td: dict) -> "DecompositionPlan":
     )
 
 
+# ---------------------------------------------------------------------------
+# Lipton-Tarjan planar separator (v0.4)
+# ---------------------------------------------------------------------------
+#
+# The mathematical content
+# ------------------------
+# Lipton & Tarjan, *A Separator Theorem for Planar Graphs*, SIAM J.
+# Appl. Math. 36(2), 1979: for any connected planar graph G on n
+# vertices there is a separator S ⊆ V(G) of size |S| ≤ 2*sqrt(2*n)
+# such that V(G) \ S partitions into two sets A and B with no direct
+# A-B edge and |A|, |B| ≤ 2n/3. The algorithm is O(n).
+#
+# What this implementation ships
+# ------------------------------
+# The SIMPLE CASE of Lipton-Tarjan: BFS-layer from any root, find a
+# level L_t such that the levels above and below it each carry at
+# most 2n/3 vertices and L_t itself has at most 2*sqrt(2*n) vertices.
+# When such a t exists, return (S = L_t, A = above-levels,
+# B = below-levels). This case suffices for many practical planar
+# graphs (grids, trees-of-grids, "wide-and-short" planar graphs).
+#
+# When the simple case doesn't apply (some middle level is too fat),
+# the full Lipton-Tarjan algorithm falls back to a SPANNING-TREE
+# FUNDAMENTAL-CYCLE argument: it picks a non-tree edge whose
+# fundamental cycle in the BFS spanning tree separates the graph
+# well. That argument has corner cases (degenerate spanning trees,
+# non-cellular embeddings on disconnected components) that aren't
+# yet implemented; in those cases the function honestly raises
+# ValueError and the caller falls back to user-supplied separator.
+#
+# Why the simple case alone is useful
+# -----------------------------------
+# For any planar graph with bounded face-degree (most workflow
+# graphs, dependency graphs, geometric meshes), the BFS-layer
+# distribution is roughly uniform and the simple case fires. The
+# fancier cases are needed mainly for adversarially-constructed
+# planar graphs.
+# ---------------------------------------------------------------------------
+
+
+def _lipton_tarjan_separator(problem: Any
+                              ) -> Tuple[Set[Any], Set[Any], Set[Any]]:
+    r"""Find a planar separator ``(S, A, B)`` via the simple-case
+    Lipton-Tarjan BFS-layer algorithm.
+
+    Algorithm
+    ---------
+    1. BFS-layer the graph from an arbitrary root, producing levels
+       ``L_0, L_1, ..., L_max``.
+    2. For each candidate level ``t``, compute:
+         - ``above_count`` = total vertices in ``L_0..L_{t-1}``,
+         - ``below_count`` = total vertices in ``L_{t+1}..L_max``,
+         - ``level_size`` = ``|L_t|``.
+       Return the first ``t`` such that
+         - ``above_count <= 2n/3``,
+         - ``below_count <= 2n/3``,
+         - ``level_size <= 2*sqrt(2*n)``
+       all hold.
+    3. The partition ``(S = L_t, A = above, B = below)`` is a valid
+       Lipton-Tarjan separator: every edge has both endpoints in
+       adjacent BFS levels (by the BFS distance property), so no
+       edge bypasses ``L_t`` directly from ``A`` to ``B``.
+
+    Parameters
+    ----------
+    problem : dict
+        Graph dict with keys ``"vertices"`` and ``"edges"``. A
+        ``"rotation"`` field is accepted but not required (the
+        algorithm only consults adjacency). The graph must be
+        connected; ValueError is raised on disconnected input.
+
+    Returns
+    -------
+    (S, A, B) : tuple of three sets
+        ``S`` is the discovered separator; ``A`` is the "above"
+        side; ``B`` is the "below" side. They partition V(G).
+
+    Raises
+    ------
+    ValueError
+        If the simple case fails -- specifically: (a) the graph is
+        disconnected (some vertex unreachable from the BFS root);
+        (b) no level satisfies all three Lipton-Tarjan inequalities
+        (which can happen on adversarial planar graphs and on
+        non-planar graphs). The caller should fall back to a
+        user-supplied separator in either case.
+
+    Honest scope (v0.4)
+    -------------------
+    The full Lipton-Tarjan algorithm includes a spanning-tree
+    fundamental-cycle backup case that handles "fat middle level"
+    graphs. That case requires the planar embedding (rotation system)
+    and has subtle corner cases (non-cellular embeddings, degenerate
+    fundamental cycles); it is not yet implemented. For graphs where
+    the simple case fails, the framework honestly stops and asks for
+    a user-supplied separator.
+    """
+    if not isinstance(problem, dict) or "vertices" not in problem:
+        raise ValueError(
+            "_lipton_tarjan_separator expects a graph dict with "
+            "'vertices' and 'edges'"
+        )
+
+    vertices = list(problem["vertices"])
+    edges = list(problem["edges"])
+    n = len(vertices)
+
+    # Trivial cases: tiny graphs have no useful Lipton-Tarjan
+    # partition (the separator-size bound 2*sqrt(2*n) exceeds the
+    # graph size for n < 8). Return everything-in-separator.
+    if n < 3:
+        return set(vertices), set(), set()
+
+    # Build adjacency. The rotation system, if present, agrees with
+    # the edge list on adjacency (it just adds cyclic ordering); we
+    # only need adjacency here.
+    adj: Dict[Any, List[Any]] = {v: [] for v in vertices}
+    for (u, w) in edges:
+        # Skip self-loops -- they don't affect BFS distances.
+        if u == w:
+            continue
+        # Avoid duplicate-edge double counting in adjacency lists.
+        if w not in adj[u]:
+            adj[u].append(w)
+        if u not in adj[w]:
+            adj[w].append(u)
+
+    # BFS-layer from the first vertex. Any root works; the algorithm's
+    # guarantees are independent of root choice (though different
+    # roots may yield different valid separators).
+    root = vertices[0]
+    levels: List[List[Any]] = [[root]]
+    seen = {root}
+    while True:
+        next_level: List[Any] = []
+        for v in levels[-1]:
+            for w in adj[v]:
+                if w not in seen:
+                    seen.add(w)
+                    next_level.append(w)
+        if not next_level:
+            break
+        levels.append(next_level)
+
+    # Connectivity check: BFS reaches every vertex iff the graph is
+    # connected. Lipton-Tarjan requires connectivity; if not, raise.
+    if len(seen) != n:
+        raise ValueError(
+            f"_lipton_tarjan_separator: graph appears disconnected "
+            f"({len(seen)} of {n} vertices reachable from BFS root); "
+            f"Lipton-Tarjan requires a connected graph"
+        )
+
+    # Cumulative size of levels 0..t-1 (= "above" level t).
+    # cum_above[0] = 0; cum_above[len(levels)] = n.
+    cum_above = [0]
+    for L in levels:
+        cum_above.append(cum_above[-1] + len(L))
+
+    # Lipton-Tarjan threshold values. The 2n/3 bound is the
+    # theorem's "balanced partition" guarantee; the 2*sqrt(2n) bound
+    # is the separator-size guarantee.
+    bound_AB = 2.0 * n / 3.0
+    bound_S = 2.0 * math.sqrt(2.0 * n)
+
+    # Scan levels in order; the FIRST t satisfying all three bounds
+    # is a valid separator. (Any t works; the search is deterministic
+    # rather than optimal -- a future polishing pass could pick the
+    # t that minimises |L_t| for tighter separators.)
+    candidate: Optional[int] = None
+    for t in range(len(levels)):
+        above = cum_above[t]
+        below = n - cum_above[t] - len(levels[t])
+        level_size = len(levels[t])
+        if (above <= bound_AB
+                and below <= bound_AB
+                and level_size <= bound_S):
+            candidate = t
+            break
+
+    if candidate is None:
+        # Simple case doesn't apply. Either the graph has a fat middle
+        # level (legitimate planar case requiring the spanning-tree
+        # backup) or it's not planar (in which case Lipton-Tarjan's
+        # size bound doesn't even apply). Either way, the caller
+        # should fall back to user-supplied.
+        max_level_size = max(len(L) for L in levels)
+        raise ValueError(
+            f"_lipton_tarjan_separator: simple-case Lipton-Tarjan did "
+            f"not find a valid level separator (n={n}, "
+            f"max_level_size={max_level_size}, "
+            f"2*sqrt(2n) bound={bound_S:.2f}). This can happen on "
+            f"adversarial planar graphs (where the full spanning-tree "
+            f"backup case is needed -- a v0.5 deliverable) or on "
+            f"non-planar graphs (where the bound doesn't apply). "
+            f"Provide a user-supplied separator via "
+            f"PlanarSeparator(separator=..., side_a=..., side_b=...) "
+            f"instead."
+        )
+
+    # Build the three sets.
+    S = set(levels[candidate])
+    A: Set[Any] = set()
+    B: Set[Any] = set()
+    for i, L in enumerate(levels):
+        if i < candidate:
+            A.update(L)
+        elif i > candidate:
+            B.update(L)
+    return S, A, B
+
+
 class PlanarSeparator:
     r"""Divide-and-conquer decomposition: split the graph into two halves
-    along a user-supplied vertex separator, recurse on each side,
-    combine via a sum over separator-vertex match patterns.
+    along a vertex separator, recurse on each side, combine via a sum
+    over separator-vertex match patterns.
 
-    The user supplies the partition ``(side_a, side_b, separator)``;
-    auto-discovery of the separator (Lipton-Tarjan 1979) is a deeper
-    deliverable. For PERFECT-MATCHING COUNT, the decomposition is:
+    The separator can be either USER-SUPPLIED (the v0.3 mode -- pass
+    ``separator``, ``side_a``, ``side_b`` explicitly) or AUTO-DISCOVERED
+    via Lipton-Tarjan 1979 (the v0.4 mode -- pass ``auto=True``).
+
+    Mathematics
+    -----------
+    For PERFECT-MATCHING COUNT, the decomposition is:
 
         PerfMatch(G) = sum over (S_to_A, S_to_B, S_pairs) of
             (prod over (s,t) in S_pairs of w(s,t))
@@ -487,21 +704,73 @@ class PlanarSeparator:
     tractable for the small separators that planar graphs admit
     (``|S| = O(sqrt(|V|))`` by Lipton-Tarjan).
 
-    Use::
+    Use (manual / v0.3 mode)
+    ------------------------
+    ::
 
         decomp = PlanarSeparator(separator={2, 3},
                                   side_a={0, 1}, side_b={4, 5})
         plan = decomp.decompose(graph)
         answer = plan.evaluate(brute_force_count_matchings_leaf)
+
+    Use (auto / v0.4 mode)
+    ----------------------
+    ::
+
+        decomp = PlanarSeparator(auto=True)
+        plan = decomp.decompose(graph)        # Lipton-Tarjan finds (S, A, B)
+        answer = plan.evaluate(brute_force_count_matchings_leaf)
+
+    The auto mode is best-effort: when the simple case of Lipton-
+    Tarjan fails (typically: adversarial planar graphs with a fat
+    middle BFS level, or non-planar inputs), ``decompose()`` raises
+    ``ValueError`` and the caller should fall back to manual mode.
     """
     name = "PlanarSeparator"
 
-    def __init__(self, separator: Set, side_a: Set, side_b: Set):
-        """``side_a``, ``side_b``, ``separator`` must partition the
-        graph's vertex set (disjoint + covering)."""
-        self.separator = set(separator)
-        self.side_a    = set(side_a)
-        self.side_b    = set(side_b)
+    def __init__(self,
+                  separator: Optional[Set] = None,
+                  side_a: Optional[Set] = None,
+                  side_b: Optional[Set] = None,
+                  *,
+                  auto: bool = False):
+        r"""Construct either a manual or auto-discovery separator.
+
+        Parameters
+        ----------
+        separator, side_a, side_b : set, optional
+            The three sets must partition the graph's vertex set
+            (disjoint + covering) when ``auto=False``. Ignored when
+            ``auto=True``.
+        auto : bool
+            When True, the separator is discovered via Lipton-Tarjan
+            in :meth:`decompose`; ``separator/side_a/side_b`` may be
+            omitted. When False (default), all three sets must be
+            supplied.
+
+        Raises
+        ------
+        ValueError
+            When ``auto=False`` and any of the three sets is missing.
+        """
+        self.auto = bool(auto)
+        if self.auto:
+            # Defer set-population to decompose() time, when the
+            # actual graph is available.
+            self.separator: Optional[Set] = None
+            self.side_a:    Optional[Set] = None
+            self.side_b:    Optional[Set] = None
+        else:
+            # v0.3 manual mode: require all three sets up front.
+            if separator is None or side_a is None or side_b is None:
+                raise ValueError(
+                    f"{self.name}: must provide separator/side_a/"
+                    f"side_b (or set auto=True for Lipton-Tarjan "
+                    f"auto-discovery)"
+                )
+            self.separator = set(separator)
+            self.side_a    = set(side_a)
+            self.side_b    = set(side_b)
 
     def decompose(self, problem: Any) -> "DecompositionPlan":
         """Build the separator-decomposition tree for ``problem``.
@@ -522,6 +791,18 @@ class PlanarSeparator:
             raise ValueError(
                 f"{self.name}: expects a graph dict with 'vertices' and 'edges'"
             )
+
+        # v0.4 auto-discovery: when the constructor received auto=True,
+        # invoke Lipton-Tarjan now that the actual graph is available.
+        # We always re-discover (rather than caching) so that one
+        # auto-instance can be applied to multiple graphs. The helper
+        # raises ValueError if the simple case doesn't apply; we let
+        # that propagate so the caller knows to fall back to a
+        # user-supplied separator.
+        if self.auto:
+            self.separator, self.side_a, self.side_b = \
+                _lipton_tarjan_separator(problem)
+
         verts   = set(problem["vertices"])
         edges   = list(problem["edges"])
         weights = dict(problem.get("weights", {}))

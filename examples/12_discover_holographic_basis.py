@@ -5,7 +5,7 @@ T applied to the signature produces a Cai-Gorenstein Theorem-9
 standard-basis matchgate signature (alternate-zero with the non-zero
 entries forming a geometric progression).
 
-This is the v0.3 practical fragment of Cai-Lu's SRP (Simultaneous
+This is the practical fragment of Cai-Lu's SRP (Simultaneous
 Realisability Problem) algorithm:
 
   - Cai-Lu 2011 Theorem 2.5 gives the GATE: a signature is matchgate-
@@ -14,14 +14,22 @@ Realisability Problem) algorithm:
     basis: alternate-zero with geometric progression on the non-zero
     entries.
   - This example uses HolographicBasisPair.discover_basis() to search
-    the basis manifold (canonical candidates + parameterised grid +
-    polishing) for a T that maps the input into the target form.
+    the basis manifold for a T that maps the input into the target
+    form. The v0.4 search has four steps in increasing-cost order:
+    (1) order-2 recurrence gate; (2) v0.4 closed-form shortcut derived
+    from the recurrence kernel (catches rank-1 signatures whose root
+    lies anywhere on the real line); (3) canonical-bases sweep
+    (identity, Hadamard, swap, common shears) for complex-roots cases;
+    (4) parameterised grid + coordinate-descent polish as final
+    fallback.
 
-Honest scope: the search handles clean cases (Hadamard, identity,
-swap, common shears). For exotic signatures requiring custom scalings
-or complex bases, the v0.3 search may return None even when a basis
-exists -- the full Cai-Lu §4 algorithm with all four
-"realizability subvariety" cases is a v0.4 deliverable.
+Honest scope: rank-2 signatures (true two-root decomposition with
+both amplitudes non-zero) are GENUINELY matchgate-rank-2 in every
+basis -- no 2x2 basis can bring them to matchgate-standard form. The
+search correctly returns None for these. Adversarial complex-roots
+cases that miss the canonical candidates also return None; the full
+Cai-Lu §4 algorithm with all four "realizability subvariety" cases
+is a v0.5 deliverable.
 """
 from structural_computing import HolographicBasisPair
 
@@ -40,7 +48,8 @@ for label, sig in cases:
     discovery = h.discover_basis(sig)
     if discovery is None:
         print(f"  -> no basis found (signature not matchgate-realisable "
-               f"or beyond the v0.3 search's reach)")
+               f"on any basis, or rank-2 with complex roots outside "
+               f"the canonical candidates)")
     else:
         T, result = discovery
         rounded_T = [[round(float(x), 6) for x in row] for row in T]
