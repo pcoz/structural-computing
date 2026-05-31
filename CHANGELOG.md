@@ -6,6 +6,68 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 once it reaches v1.0.0; until then, the v0.x API may shift between minor
 versions.
 
+## [0.10.0a1] — 2026-05-31 (v0.10 arc: tropical optimisation in orchestrator)
+
+**New user-facing capability: min-cost queries on the same admissible-
+set machinery.** The orchestrator can now answer MIN-WEIGHT
+perfect-matching and MIN-COST scheduling questions, dispatching
+to holant-tools' polynomial-time tropical Pfaffian kernel.
+
+The same Holant network that counts admissible configurations under
+the standard (+, ×) semiring computes the **cheapest** admissible
+configuration under the tropical (min, +) semiring. v0.10 wires
+this second-semiring capability into the orchestrator + the
+`StructuralComputer` one-liner wrapper.
+
+### Added
+
+- **`_min_weight_matching_leaf`** in `orchestrator.py` — leaf
+  evaluator for min-weight perfect matching on graphs (T2 / T4).
+  Delegates to `holant_tools.min_weight_perfect_matching`, which
+  dispatches between Hungarian (bipartite K_{n,n}, O(n³)) and
+  Edmonds blossom via NetworkX (general non-bipartite, O(n³)).
+  Returns `{"cost": float, "matching": [(u, v), ...], "feasible": bool}`.
+- **`_min_cost_schedule_leaf`** in `orchestrator.py` — leaf
+  evaluator for `SchedulingInstance` inputs. Delegates to
+  `holant_tools.min_cost_schedule`. Returns
+  `{"cost": float, "schedule": dict, "feasible": bool}`.
+- **Registry entries** in DEFAULT_LEAF_REGISTRY:
+  - `(T2, "min_weight_matching")` and `(T4, "min_weight_matching")`
+  - `(T2, "min_cost_schedule")` and `(T4, "min_cost_schedule")`
+- **Wrapper methods** on `StructuralComputer` (in `easy.py`):
+  - `sc.min_weight_matching(graph, weights=None) -> dict`
+  - `sc.min_cost_schedule(instance, cost_fn, **kwargs) -> dict`
+
+### Test count
+
+- 295 passing (290 v0.9 baseline + 5 new v0.10 tests).
+
+### Honest scope
+
+The leaf evaluators implemented in v0.10 are `min_weight_matching`
+and `min_cost_schedule`. Other tropical primitives already shipped
+in `holant-tools` since v0.2.0a* but not yet wired into the
+orchestrator: `min_cost_flow`, `min_cost_roster`, `min_cost_dedup`,
+`tropical_instance_coordinates`. These will follow as v0.11+
+deliverables; the engine is already production-ready, only the
+orchestrator-side dispatch wiring is missing.
+
+### Worked example
+
+```python
+from structural_computing import StructuralComputer
+sc = StructuralComputer()
+
+# 4-cycle 0-1-2-3-0 with weighted edges
+graph = [(0, 1), (1, 2), (2, 3), (3, 0)]
+weights = {(0, 1): 1.0, (1, 2): 10.0, (2, 3): 1.0, (3, 0): 10.0}
+
+result = sc.min_weight_matching(graph, weights)
+# {'cost': 2.0, 'matching': [(0, 1), (2, 3)], 'feasible': True}
+```
+
+---
+
 ## [0.9.0a2] — 2026-05-31 (documentation-only patch — PyPI public/private boundary)
 
 **Documentation-only release.** Same code as v0.9.0a1; only the

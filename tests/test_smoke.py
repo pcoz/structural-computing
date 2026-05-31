@@ -132,6 +132,81 @@ def test_audit_keys(sc):
         assert required in audit
 
 
+# ============================================================
+# v0.10: tropical / min-cost optimisation
+# ============================================================
+
+
+def test_v010_min_weight_matching_k4_uniform(sc):
+    """K_4 with weights — three perfect matchings, pick the cheapest."""
+    graph = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
+    weights = {(0, 1): 1.0, (0, 2): 5.0, (0, 3): 3.0,
+               (1, 2): 4.0, (1, 3): 2.0, (2, 3): 6.0}
+    result = sc.min_weight_matching(graph, weights)
+    assert result["feasible"]
+    # Three matchings: (0,1)+(2,3)=7, (0,2)+(1,3)=7, (0,3)+(1,2)=7 — all tied.
+    assert abs(result["cost"] - 7.0) < 1e-9
+
+
+def test_v010_min_weight_matching_4cycle_picks_cheap(sc):
+    """4-cycle with edge weights asymmetric across the two perfect
+    matchings: the cheaper matching should win."""
+    graph = [(0, 1), (1, 2), (2, 3), (3, 0)]
+    weights = {(0, 1): 1.0, (1, 2): 10.0, (2, 3): 1.0, (3, 0): 10.0}
+    # M_a = {(0,1), (2,3)}: cost 2. M_b = {(1,2), (3,0)}: cost 20.
+    result = sc.min_weight_matching(graph, weights)
+    assert result["feasible"]
+    assert abs(result["cost"] - 2.0) < 1e-9
+    # Matching should be the cheap pair (order of (u, v) may vary).
+    edges_set = {frozenset(e) for e in result["matching"]}
+    assert edges_set == {frozenset({0, 1}), frozenset({2, 3})}
+
+
+def test_v010_min_weight_matching_infeasible_on_odd_vertices(sc):
+    """A graph with an odd number of vertices has no perfect matching."""
+    graph = [(0, 1), (1, 2)]  # 3 vertices
+    result = sc.min_weight_matching(graph)
+    assert not result["feasible"]
+    assert result["cost"] is None
+    assert result["matching"] is None
+
+
+def test_v010_min_weight_matching_default_weights_1(sc):
+    """If no weights dict is supplied, every edge defaults to weight
+    1.0; total cost = n/2."""
+    graph = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
+    result = sc.min_weight_matching(graph)  # no weights
+    assert result["feasible"]
+    # Cost = 2 edges × 1.0 = 2.0
+    assert abs(result["cost"] - 2.0) < 1e-9
+
+
+def test_v010_min_cost_schedule_two_jobs_two_machines():
+    """Minimal scheduling instance: 2 jobs, 2 machines, asymmetric
+    cost. The optimal schedule assigns each job to its preferred
+    machine."""
+    import holant_tools
+    from structural_computing import StructuralComputer
+    sc = StructuralComputer()
+
+    jobs = [holant_tools.Job(name="J1"), holant_tools.Job(name="J2")]
+    machines = [holant_tools.Machine(name="M1"), holant_tools.Machine(name="M2")]
+    instance = holant_tools.SchedulingInstance(jobs=jobs, machines=machines)
+
+    def cost_fn(job, machine, slot):
+        # J1 → M1 cheap, M2 expensive. J2 → opposite.
+        if job.name == "J1":
+            return 1.0 if machine.name == "M1" else 5.0
+        return 5.0 if machine.name == "M1" else 1.0
+
+    result = sc.min_cost_schedule(instance, cost_fn)
+    assert result["feasible"]
+    assert abs(result["cost"] - 2.0) < 1e-9  # 1.0 + 1.0
+    # Verify the schedule assigns each job to its preferred machine.
+    assert result["schedule"]["J1"][0] == "M1"
+    assert result["schedule"]["J2"][0] == "M2"
+
+
 def test_explain_returns_string(sc):
     text = sc.explain([(0, 1), (1, 2), (2, 3), (3, 0)])
     assert isinstance(text, str) and len(text) > 0

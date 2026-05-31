@@ -35,7 +35,7 @@ more polish -- but the shape is here.
 """
 import math
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 
@@ -341,6 +341,87 @@ class StructuralComputer:
         if matching is None:
             return []
         return [(vertices[i], vertices[j]) for (i, j) in matching]
+
+    # -- tropical / min-cost optimisation (v0.10) ---------------------------
+
+    def min_weight_matching(self,
+                              graph: GraphLike,
+                              weights: Optional[Dict[Tuple[Any, Any], float]] = None,
+                              ) -> Dict[str, Any]:
+        """Minimum-weight perfect matching, exact, polynomial time.
+
+        Same admissible-set machinery as ``matching_count`` and
+        ``witness``, but with the tropical (min, +) semiring instead of
+        the standard (+, ×). Dispatches internally between Hungarian
+        (for bipartite K_{n,n} inputs) and Edmonds blossom (for general
+        non-bipartite), both polynomial-time and exact.
+
+        Args:
+            graph: any graph format ``_normalise_graph`` accepts.
+            weights: optional dict mapping edges (u, v) to real-valued
+                costs. Missing edges default to weight 1.0.
+
+        Returns:
+            ``{"cost": float, "matching": [(u, v), ...],
+              "feasible": bool}``. Infeasible (no perfect matching
+            exists) returns feasible=False with cost=matching=None.
+        """
+        vertices, edges, _ = _normalise_graph(graph)
+        n = len(vertices)
+        if n % 2 != 0:
+            return {"cost": None, "matching": None, "feasible": False}
+        idx = {v: i for i, v in enumerate(vertices)}
+        W = [[math.inf] * n for _ in range(n)]
+        weights = weights or {}
+        for (u, v) in edges:
+            i, j = idx[u], idx[v]
+            w = weights.get((u, v))
+            if w is None:
+                w = weights.get((v, u), 1.0)
+            W[i][j] = W[j][i] = float(w)
+        cost, matching = holant_tools.min_weight_perfect_matching(W)
+        if matching is None:
+            return {"cost": None, "matching": None, "feasible": False}
+        return {
+            "cost": float(cost),
+            "matching": [(vertices[i], vertices[j]) for (i, j) in matching],
+            "feasible": True,
+        }
+
+    def min_cost_schedule(self,
+                            instance: Any,
+                            cost_fn: Callable[[Any, Any, int], float],
+                            *,
+                            allowed_machines: Optional[Dict[str, set]] = None,
+                            time_windows: Optional[Dict[str, Tuple[int, int]]] = None,
+                            forbidden_edges: Optional[set] = None,
+                            ) -> Dict[str, Any]:
+        """Exact polynomial-time minimum-cost schedule on a
+        ``holant_tools.SchedulingInstance``.
+
+        Wraps ``holant_tools.min_cost_schedule``. Accepts the same
+        per-job constraints (``allowed_machines``, ``time_windows``,
+        ``forbidden_edges``) as the engine entry point.
+
+        Returns ``{"cost": float, "schedule": ..., "feasible": bool}``.
+        """
+        result = holant_tools.min_cost_schedule(
+            instance, cost_fn,
+            allowed_machines=allowed_machines,
+            time_windows=time_windows,
+            forbidden_edges=forbidden_edges,
+        )
+        if hasattr(result, "feasible") and not result.feasible:
+            return {"cost": None, "schedule": None, "feasible": False}
+        # holant-tools' MinCostScheduleResult uses `min_cost` and `schedule`.
+        cost_val = getattr(result, "min_cost", None)
+        if cost_val is None:
+            cost_val = getattr(result, "cost", None)
+        return {
+            "cost": float(cost_val) if cost_val is not None else None,
+            "schedule": getattr(result, "schedule", None),
+            "feasible": True,
+        }
 
     def single_points_of_failure(self, graph: GraphLike) -> List[Tuple[Any, Any]]:
         """Edges whose removal eliminates all perfect matchings -- the

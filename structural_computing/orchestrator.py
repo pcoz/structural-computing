@@ -290,6 +290,115 @@ def _tail_probability_leaf(problem: Any, question: str) -> float:
     return total
 
 
+# ---------- Tropical (min-cost) leaf evaluators ----------------------------
+#
+# Added v0.10: wire holant-tools' tropical-Holant kernel into the orchestrator
+# as a new leaf-evaluator family. The same admissible-set machinery that
+# counts perfect matchings under the standard (+, ×) semiring computes
+# MIN-WEIGHT perfect matchings under the tropical (min, +) semiring. The
+# leaf evaluators below delegate to the corresponding holant-tools entry
+# points (which dispatch internally between Hungarian for bipartite and
+# Edmonds for general, both polynomial-time and exact).
+#
+# The result shape is `{"cost": float, "matching": [(u, v), ...], "feasible": bool}`.
+# An infeasible problem (no perfect matching exists) returns `feasible=False`
+# and `cost = matching = None`.
+
+
+def _min_weight_matching_leaf(problem: Any, question: str) -> Dict[str, Any]:
+    """min_weight_matching on a graph (T2 or T4): exact polynomial-time
+    minimum-weight perfect matching via holant-tools' tropical Pfaffian
+    dispatch (Hungarian for bipartite K_{n,n}, Edmonds via NetworkX for
+    general non-bipartite, enumeration fallback if NetworkX is absent).
+
+    The problem dict must include a ``weights`` field mapping each edge
+    (u, v) to its real-valued cost; missing edges default to weight 1.0.
+
+    Returns {"cost": float, "matching": [(u, v), ...], "feasible": bool}.
+    Infeasible problems return feasible=False, cost/matching = None.
+    """
+    import math
+    import holant_tools
+    if not isinstance(problem, dict) or "vertices" not in problem:
+        raise ValueError(
+            f"min_weight_matching_leaf expects a graph dict; "
+            f"got {type(problem).__name__}"
+        )
+    vertices = list(problem["vertices"])
+    edges = list(problem["edges"])
+    weights = problem.get("weights", {})
+    n = len(vertices)
+    if n % 2 != 0:
+        return {"cost": None, "matching": None, "feasible": False}
+    idx = {v: i for i, v in enumerate(vertices)}
+    W = [[math.inf] * n for _ in range(n)]
+    for (u, v) in edges:
+        i, j = idx[u], idx[v]
+        # Canonical edge weight lookup. Default to 1.0 if no weight given.
+        w = weights.get((u, v))
+        if w is None:
+            w = weights.get((v, u), 1.0)
+        W[i][j] = W[j][i] = float(w)
+    cost, matching = holant_tools.min_weight_perfect_matching(W)
+    if matching is None:
+        return {"cost": None, "matching": None, "feasible": False}
+    return {
+        "cost": float(cost),
+        "matching": [(vertices[i], vertices[j]) for (i, j) in matching],
+        "feasible": True,
+    }
+
+
+def _min_cost_schedule_leaf(problem: Any, question: str) -> Dict[str, Any]:
+    """min_cost_schedule on a SchedulingInstance: exact polynomial-time
+    minimum-cost schedule via holant-tools' tropical scheduling pipeline.
+
+    The problem must be a dict with:
+      - ``instance``: a ``holant_tools.SchedulingInstance``
+      - ``cost_fn``: callable ``(job, machine, time_slot) -> float``
+
+    Optional:
+      - ``allowed_machines``: per-job machine restrictions
+      - ``time_windows``: per-job time-window restrictions
+      - ``forbidden_edges``: edges to exclude from the matching
+
+    Returns {"cost": float, "schedule": dict, "feasible": bool}.
+    """
+    import holant_tools
+    if not isinstance(problem, dict) or "instance" not in problem:
+        raise ValueError(
+            f"min_cost_schedule_leaf expects a dict with 'instance' "
+            f"(SchedulingInstance); got {type(problem).__name__}"
+        )
+    instance = problem["instance"]
+    cost_fn = problem.get("cost_fn")
+    if cost_fn is None:
+        raise ValueError(
+            "min_cost_schedule_leaf requires a 'cost_fn' callable in "
+            "the problem dict: (job, machine, time_slot) -> float"
+        )
+    result = holant_tools.min_cost_schedule(
+        instance,
+        cost_fn,
+        allowed_machines=problem.get("allowed_machines"),
+        time_windows=problem.get("time_windows"),
+        forbidden_edges=problem.get("forbidden_edges"),
+    )
+    # holant-tools' result is a MinCostScheduleResult dataclass; normalise
+    # to a plain dict for the orchestrator's audit trail.
+    if hasattr(result, "feasible") and not result.feasible:
+        return {"cost": None, "schedule": None, "feasible": False}
+    # holant-tools' MinCostScheduleResult uses `min_cost` and `schedule`.
+    cost_val = getattr(result, "min_cost", None)
+    if cost_val is None:
+        cost_val = getattr(result, "cost", None)
+    return {
+        "cost": float(cost_val) if cost_val is not None else None,
+        "schedule": getattr(result, "schedule", None),
+        "feasible": True,
+    }
+
+
 # ---------- Constraint-set leaf evaluators ---------------------------------
 
 def _count_solutions_leaf(problem: Any, question: str) -> int:
@@ -530,6 +639,15 @@ DEFAULT_LEAF_REGISTRY: Dict[Tuple[str, str], LeafEvaluator] = {
     ("T3", "discover_common_basis"):     _discover_common_basis_leaf,
     # General (non-symmetric) holographic transform on a 2^a tensor.
     ("T3", "holographic_transform_general"): _holographic_transform_general_leaf,
+    # v0.10: tropical (min-cost) leaf evaluators. Same admissible-set
+    # machinery as the counting questions, with the (min, +) semiring.
+    ("T2", "min_weight_matching"):       _min_weight_matching_leaf,
+    ("T4", "min_weight_matching"):       _min_weight_matching_leaf,
+    # SchedulingInstance is its own tier ("T_scheduling") in the
+    # classifier; defaults provided for both common labels until the
+    # classifier is fully integrated.
+    ("T2", "min_cost_schedule"):         _min_cost_schedule_leaf,
+    ("T4", "min_cost_schedule"):         _min_cost_schedule_leaf,
 }
 
 
