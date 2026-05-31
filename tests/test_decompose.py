@@ -644,3 +644,118 @@ def test_v06_d2_disconnected_still_raises():
     g = {"vertices": [0, 1, 2, 3], "edges": [(0, 1), (2, 3)]}
     with pytest.raises(ValueError, match="disconnected"):
         _lipton_tarjan_separator(g)
+
+
+# ============================================================
+# v0.7 D2: fundamental-cycle backup (4th tier of LT cascade)
+# ============================================================
+
+
+def test_v07_d2_fundamental_cycle_helper_simple_cycle():
+    """Fundamental cycle for a non-tree edge is the path through the
+    BFS spanning tree from one endpoint to the other, plus the edge."""
+    from structural_computing.decompose import _fundamental_cycle
+    # Tree:
+    #     0
+    #    / \
+    #   1   2
+    #   |
+    #   3
+    # plus non-tree edge (2, 3): cycle should be {0, 1, 2, 3}.
+    tree_parent = {0: None, 1: 0, 2: 0, 3: 1}
+    cycle = _fundamental_cycle(tree_parent, 2, 3)
+    assert set(cycle) == {0, 1, 2, 3}, \
+        f"expected cycle {{0,1,2,3}}, got {set(cycle)}"
+
+
+def test_v07_d2_fundamental_cycle_backup_catches_planar_grid():
+    """The 4x4 grid (16 vertices) — earlier tiers may or may not catch
+    this, but the fundamental-cycle backup should return a balanced
+    separator within the LT bounds."""
+    from structural_computing.decompose import (
+        _lipton_tarjan_fundamental_cycle_backup,
+    )
+    # Build 4x4 grid.
+    rows, cols = 4, 4
+    vertices = [(r, c) for r in range(rows) for c in range(cols)]
+    edges = []
+    for r in range(rows):
+        for c in range(cols):
+            if c + 1 < cols:
+                edges.append(((r, c), (r, c + 1)))
+            if r + 1 < rows:
+                edges.append(((r, c), (r + 1, c)))
+    n = len(vertices)
+    adj = {v: [] for v in vertices}
+    for (a, b) in edges:
+        adj[a].append(b)
+        adj[b].append(a)
+    # Build BFS levels from (0, 0).
+    from collections import deque
+    levels = [[(0, 0)]]
+    seen = {(0, 0)}
+    frontier = deque([(0, 0)])
+    while frontier:
+        next_frontier = []
+        while frontier:
+            v = frontier.popleft()
+            for u in adj[v]:
+                if u not in seen:
+                    seen.add(u)
+                    next_frontier.append(u)
+        if next_frontier:
+            levels.append(next_frontier)
+            frontier = deque(next_frontier)
+    import math
+    bound_AB = 2.0 * n / 3.0
+    bound_S = 2.0 * math.sqrt(2.0 * n)
+    S, A, B = _lipton_tarjan_fundamental_cycle_backup(
+        vertices, adj, levels, n, bound_AB, bound_S,
+    )
+    assert S | A | B == set(vertices)
+    assert S & A == set() and S & B == set() and A & B == set()
+    assert len(S) <= bound_S, f"|S|={len(S)} exceeds bound {bound_S}"
+    assert len(A) <= bound_AB and len(B) <= bound_AB
+
+
+def test_v07_d2_cascade_falls_through_to_fundamental_cycle():
+    """End-to-end via _lipton_tarjan_separator: when the first three
+    tiers fail (or any of them succeed), the cascade returns a valid
+    separator. The fourth tier exists as a safety net."""
+    from structural_computing.decompose import _lipton_tarjan_separator
+    # Use a 4x4 grid; some tier will succeed.
+    rows, cols = 4, 4
+    vertices = [(r, c) for r in range(rows) for c in range(cols)]
+    edges = []
+    for r in range(rows):
+        for c in range(cols):
+            if c + 1 < cols:
+                edges.append(((r, c), (r, c + 1)))
+            if r + 1 < rows:
+                edges.append(((r, c), (r + 1, c)))
+    g = {"vertices": vertices, "edges": edges}
+    S, A, B = _lipton_tarjan_separator(g)
+    assert S | A | B == set(vertices)
+    assert S & A == set() and S & B == set() and A & B == set()
+
+
+def test_v07_d2_fundamental_cycle_raises_on_tree():
+    """If the graph IS a tree, there are no non-tree edges; the
+    backup should raise. (This case is unreachable in practice since
+    a tree's BFS gives a balanced simple-case separator, but the
+    helper's error path should be correct.)"""
+    import math
+    from structural_computing.decompose import (
+        _lipton_tarjan_fundamental_cycle_backup,
+    )
+    # Path graph 0 - 1 - 2 - 3.
+    vertices = [0, 1, 2, 3]
+    adj = {0: [1], 1: [0, 2], 2: [1, 3], 3: [2]}
+    levels = [[0], [1], [2], [3]]
+    n = 4
+    bound_AB = 2.0 * n / 3.0
+    bound_S = 2.0 * math.sqrt(2.0 * n)
+    with pytest.raises(ValueError, match="no non-tree edges"):
+        _lipton_tarjan_fundamental_cycle_backup(
+            vertices, adj, levels, n, bound_AB, bound_S,
+        )

@@ -6,6 +6,72 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 once it reaches v1.0.0; until then, the v0.x API may shift between minor
 versions.
 
+## [0.8.0a1] — 2026-05-31 (v0.8 arc: math completeness, cont.)
+
+**Math completeness arc continuing from v0.6.** Closes the two
+remaining v0.6-era honest-scope gaps:
+
+1. **Higher-m augmented Plücker enumeration** — via
+   `holant-tools v0.7.0`, the augmented-Pfaffian Plücker
+   identities now span every viable m configuration (m ∈ {1, 3,
+   5, 7, ...}) at every even arity ≥ 6 odd-parity, not just
+   m ∈ {1, 3} as in v0.6.x. This is the engine-side D1.
+2. **Fundamental-cycle backup as the 4th tier of the Lipton-
+   Tarjan cascade** — closest practical equivalent of the
+   original LT 1979 planar-dual fundamental-cycle argument. Adds
+   to the v0.4 simple BFS-layer + v0.5 tree-edge + v0.6 D2
+   level-based + articulation-augmentation cascade.
+
+### D1: higher-m augmented Plücker (delegated to holant-tools v0.7.0)
+
+- `HolographicBasisPair._augmented_plucker_identities_arity_n_odd`
+  continues as a one-line delegation. holant-tools v0.7.0
+  shipped the math; structural-computing inherits the
+  strengthened check automatically.
+- The realisability_check field still reports
+  "plucker_arity_n_full" — but the "full" is now actually full
+  (modulo the standard non-augmented enumeration that was
+  always complete on the underlying n-vertex matrix).
+- holant-tools dep floor: `>=0.6.1` → `>=0.7.0`.
+
+### D2: fundamental-cycle backup (4th tier)
+
+- New private function `_lipton_tarjan_fundamental_cycle_backup`
+  in `decompose.py`. Invoked after the v0.4 / v0.5 / v0.6 D2
+  tiers all fail. Algorithm:
+  - Reconstruct the BFS spanning tree T from the BFS levels.
+  - Enumerate non-tree edges.
+  - For each non-tree edge e = (u, v), the fundamental cycle
+    C_e = path_T(u → v) ∪ {e} (always SIMPLE since T is a
+    tree).
+  - Remove C_e vertices; compute residual connected components
+    (Jordan-curve theorem on planar inputs guarantees at most
+    TWO main components — "inside" and "outside" the cycle).
+  - Pick the non-tree edge whose cycle satisfies both
+    |C_e| ≤ 2·sqrt(2n) AND max(component) ≤ 2n/3, scoring by
+    a balance heuristic.
+- Helper `_fundamental_cycle(tree_parent, u, v)` does the
+  path-via-LCA construction.
+- Honest scope: works WITHOUT requiring rotation system input
+  (the Jordan-curve property is invoked implicitly). The full
+  LT 1979 paper's planar-dual argument additionally PROVES
+  that an acceptable non-tree edge always exists when the
+  simple case fails; our search is bounded-effort and may
+  honest-stop on adversarial graphs.
+
+### Test count
+
+- 285 passing (281 v0.7 baseline + 4 new v0.7 D2 tests).
+
+### Notes
+
+- The v0.7 arc (no-version-bump PyPI publication unblock) is
+  what brought existing versions to PyPI on 2026-05-31. The
+  v0.8 arc is the next functional release continuing the math
+  completeness chain.
+
+---
+
 ## 2026-05-31 — v0.7 arc (PyPI publication unblock; no version bump)
 
 **Shipped 2026-05-31.** No version bump. This arc landed existing

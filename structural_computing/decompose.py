@@ -665,37 +665,43 @@ def _lipton_tarjan_separator(problem: Any
         # level" where every BFS level violates either the size bound
         # or one of the partition bounds. Fall through to the v0.5
         # spanning-tree backup; if THAT also fails, the v0.6 D2 level-
-        # based + articulation-augmentation backup is invoked.
+        # based + articulation-augmentation backup is invoked. If THAT
+        # also fails, the v0.7 D2 fundamental-cycle backup is invoked
+        # (the closest practical equivalent of the original Lipton-
+        # Tarjan 1979 planar-dual argument).
         try:
             return _lipton_tarjan_tree_backup(
                 vertices, adj, levels, n, bound_AB, bound_S,
             )
         except ValueError as v05_err:
-            # v0.5 backup failed too. Try the v0.6 D2 level-based
-            # backup. This handles star-like and K_{2,n}-like graphs
-            # where the optimal separator is a small "connector" vertex
-            # set in a fat BFS level.
             try:
                 return _lipton_tarjan_level_backup(
                     vertices, adj, levels, n, bound_AB, bound_S,
                 )
             except ValueError as v06_err:
-                # All three approaches failed.
-                max_level_size = max(len(L) for L in levels)
-                raise ValueError(
-                    f"_lipton_tarjan_separator: simple BFS-layer "
-                    f"case + v0.5 tree-edge backup + v0.6 level-based "
-                    f"backup ALL failed (n={n}, "
-                    f"max_level_size={max_level_size}, "
-                    f"2*sqrt(2n) bound={bound_S:.2f}). v0.5 said: "
-                    f"{v05_err!s}. v0.6 said: {v06_err!s}. This can "
-                    f"happen on adversarial planar graphs where none "
-                    f"of the BFS-based approaches reach a valid "
-                    f"separator, or on non-planar graphs (where the "
-                    f"bound doesn't apply). Provide a user-supplied "
-                    f"separator via PlanarSeparator(separator=..., "
-                    f"side_a=..., side_b=...) instead."
-                )
+                try:
+                    return _lipton_tarjan_fundamental_cycle_backup(
+                        vertices, adj, levels, n, bound_AB, bound_S,
+                    )
+                except ValueError as v07_err:
+                    max_level_size = max(len(L) for L in levels)
+                    raise ValueError(
+                        f"_lipton_tarjan_separator: simple BFS-layer "
+                        f"case + v0.5 tree-edge backup + v0.6 level-"
+                        f"based backup + v0.7 fundamental-cycle backup "
+                        f"ALL failed (n={n}, "
+                        f"max_level_size={max_level_size}, "
+                        f"2*sqrt(2n) bound={bound_S:.2f}). v0.5 said: "
+                        f"{v05_err!s}. v0.6 said: {v06_err!s}. "
+                        f"v0.7 said: {v07_err!s}. This indicates an "
+                        f"adversarial planar graph that none of the "
+                        f"four BFS-based / fundamental-cycle "
+                        f"approaches reaches, or a non-planar graph "
+                        f"(where the LT bound doesn't apply). "
+                        f"Provide a user-supplied separator via "
+                        f"PlanarSeparator(separator=..., "
+                        f"side_a=..., side_b=...) instead."
+                    )
 
     # Build the three sets.
     S = set(levels[candidate])
@@ -1209,6 +1215,208 @@ def _connected_components_in_residual(rest: Set[Any],
                     stack.append(u)
         components.append(comp)
     return components
+
+
+# ---------------------------------------------------------------------------
+# v0.7 Deliverable 2: fundamental-cycle backup
+# ---------------------------------------------------------------------------
+#
+# The closest practical equivalent of the original Lipton-Tarjan 1979
+# planar-dual fundamental-cycle argument. Catches the residual cases
+# that the v0.4 simple BFS-layer, v0.5 spanning-tree tree-edge, and
+# v0.6 D2 level-based + articulation-augmentation tiers don't reach
+# — adversarial planar graphs where every BFS level is too fat AND
+# no balanced tree edge AND no level-with-articulation works.
+#
+# Algorithm
+# ---------
+# For a BFS spanning tree T of the planar input graph:
+#
+#   1. Each NON-TREE edge e = (u, v) defines a unique fundamental
+#      cycle C_e = path_T(u → v) ∪ {e} (always a SIMPLE cycle since
+#      T is a tree and the path is unique).
+#   2. For a planar graph, removing the cycle vertices C_e from G
+#      partitions the residual into AT MOST TWO connected
+#      components (Jordan-curve theorem; "inside" and "outside"
+#      of C_e in the planar embedding).
+#   3. Pick the e whose cycle gives the most-balanced partition,
+#      subject to:
+#        * |C_e| ≤ 2·sqrt(2n) (the LT theorem size bound),
+#        * each component size ≤ 2n/3 (the partition balance).
+#   4. Return (S = C_e vertices, A = larger component, B = smaller).
+#
+# Why this works where v0.4/v0.5/v0.6 don't
+# -----------------------------------------
+# v0.4's simple case fails when no BFS level satisfies all three
+# bounds. v0.5's tree-edge backup fails when no tree edge has a
+# balanced subtree split. v0.6 D2's level-based + articulation
+# backup fails when no BFS level can be augmented with a small
+# number of articulation vertices to give a balanced split.
+# The fundamental-cycle approach is FUNDAMENTALLY DIFFERENT: it
+# searches the (m - n + 1) non-tree edges of the BFS tree, which
+# is a richer search space than levels OR tree edges OR articulation
+# vertices alone.
+#
+# Honest scope
+# ------------
+# This implementation works WITHOUT requiring a rotation system
+# input. The Jordan-curve property is invoked implicitly: if the
+# input graph is planar AND the BFS-tree non-tree edges are
+# enumerated, removing any simple cycle's vertices leaves AT MOST
+# two connected components in the residual. We use this fact to
+# extract (A, B) from the residual graph's connected components;
+# the planar embedding itself isn't needed for the algorithm.
+#
+# The full LT 1979 paper additionally argues via the planar dual
+# graph that a specific "balanced" non-tree edge ALWAYS exists
+# when the simple case fails (subject to the right cycle-size
+# bound). Our search is bounded-effort: we try the non-tree edges
+# in a structured order and return the first acceptable one. For
+# adversarial graphs where no non-tree edge produces a valid
+# split, we raise ValueError and the caller falls back to a
+# user-supplied separator.
+# ---------------------------------------------------------------------------
+
+
+def _fundamental_cycle(tree_parent: Dict[Any, Optional[Any]],
+                        u: Any, v: Any) -> List[Any]:
+    r"""Compute the fundamental cycle C_(u,v) = path_T(u → v) ∪ {(u, v)}.
+
+    Walks both u and v up the BFS spanning tree until they meet at
+    the LCA (lowest common ancestor), then concatenates the two
+    upward paths.
+
+    Returns the list of vertices on the cycle (no specific order).
+    """
+    # Walk u up to root.
+    path_u = [u]
+    node = u
+    while tree_parent[node] is not None:
+        node = tree_parent[node]
+        path_u.append(node)
+    # Walk v up; collect ancestors into a set for LCA test.
+    u_ancestors = set(path_u)
+    path_v = [v]
+    node = v
+    while node not in u_ancestors:
+        if tree_parent[node] is None:
+            break
+        node = tree_parent[node]
+        path_v.append(node)
+    lca = node
+    # Truncate path_u at LCA: keep [u, ..., lca].
+    lca_idx_in_path_u = path_u.index(lca)
+    path_u = path_u[:lca_idx_in_path_u + 1]
+    # path_v ends at LCA; combine.
+    cycle = path_u + path_v[:-1]  # exclude duplicate LCA
+    return cycle
+
+
+def _lipton_tarjan_fundamental_cycle_backup(
+        vertices: List[Any],
+        adj: Dict[Any, List[Any]],
+        levels: List[List[Any]],
+        n: int,
+        bound_AB: float,
+        bound_S: float,
+        ) -> Tuple[Set[Any], Set[Any], Set[Any]]:
+    r"""Fourth-tier LT backup: enumerate fundamental cycles of the BFS
+    spanning tree and return the cycle that gives the best balanced
+    vertex partition (per the Jordan-curve theorem on planar inputs).
+
+    Raises ``ValueError`` if no non-tree edge produces an acceptable
+    (S, A, B) triple satisfying both the size bound ``|S| ≤ bound_S``
+    and the partition balance ``max(|A|, |B|) ≤ bound_AB``.
+    """
+    # Reconstruct BFS spanning tree parents from the BFS levels.
+    # The BFS started from levels[0]; for each vertex in level k > 0,
+    # its parent is any adjacent vertex in level k-1.
+    level_of: Dict[Any, int] = {}
+    for k, L in enumerate(levels):
+        for v in L:
+            level_of[v] = k
+    tree_parent: Dict[Any, Optional[Any]] = {}
+    tree_edges: Set[Tuple[Any, Any]] = set()
+    for k in range(len(levels)):
+        for v in levels[k]:
+            if k == 0:
+                tree_parent[v] = None
+            else:
+                # Pick any neighbour in the previous level as parent.
+                for u in adj[v]:
+                    if level_of.get(u) == k - 1:
+                        tree_parent[v] = u
+                        tree_edges.add((min(u, v, key=lambda x: (str(type(x)), x)),
+                                        max(u, v, key=lambda x: (str(type(x)), x))))
+                        break
+                else:
+                    raise ValueError(
+                        f"_lipton_tarjan_fundamental_cycle_backup: "
+                        f"BFS-level reconstruction failed at vertex "
+                        f"{v!r} (level {k}); graph may be disconnected"
+                    )
+
+    # Enumerate non-tree edges. For each undirected edge (u, v) in
+    # adj, it's a tree edge iff (sorted endpoints) ∈ tree_edges.
+    def _edge_key(a, b):
+        if (str(type(a)), a) <= (str(type(b)), b):
+            return (a, b)
+        return (b, a)
+    non_tree_edges: List[Tuple[Any, Any]] = []
+    seen_edges: Set[Tuple[Any, Any]] = set()
+    for u in vertices:
+        for v in adj[u]:
+            key = _edge_key(u, v)
+            if key in seen_edges:
+                continue
+            seen_edges.add(key)
+            if key not in tree_edges:
+                non_tree_edges.append(key)
+
+    if not non_tree_edges:
+        raise ValueError(
+            "_lipton_tarjan_fundamental_cycle_backup: graph is a "
+            "tree (no non-tree edges available); the BFS spanning "
+            "tree spans the whole edge set"
+        )
+
+    # For each non-tree edge, compute the fundamental cycle and the
+    # induced residual partition. Track the best balanced split.
+    best: Optional[Tuple[Set[Any], Set[Any], Set[Any], float]] = None
+    for (u, v) in non_tree_edges:
+        cycle = _fundamental_cycle(tree_parent, u, v)
+        if len(cycle) > bound_S:
+            continue  # cycle too large to be a valid separator
+        S = set(cycle)
+        rest = set(vertices) - S
+        components = _connected_components_in_residual(rest, adj, S)
+        if not components:
+            continue  # cycle covers everything (degenerate)
+        # Bin-pack: the LARGEST component is A; everything else is B.
+        components.sort(key=len, reverse=True)
+        A = components[0]
+        B: Set[Any] = set()
+        for c in components[1:]:
+            B.update(c)
+        if len(A) > bound_AB or len(B) > bound_AB:
+            continue  # imbalanced; try next
+        # Score: prefer smaller |S|, then more-balanced (A, B).
+        imbalance = abs(len(A) - len(B))
+        score = float(len(S)) * (1.0 + imbalance / float(n))
+        if best is None or score < best[3]:
+            best = (S, A, B, score)
+
+    if best is None:
+        raise ValueError(
+            f"_lipton_tarjan_fundamental_cycle_backup: no non-tree "
+            f"edge yields a fundamental cycle satisfying both "
+            f"|S| <= {bound_S:.2f} AND max(|A|, |B|) <= {bound_AB:.2f} "
+            f"(out of {len(non_tree_edges)} non-tree edges tried). "
+            f"This indicates a graph that doesn't have a balanced "
+            f"separating cycle in the BFS spanning tree."
+        )
+
+    return best[0], best[1], best[2]
 
 
 class PlanarSeparator:
