@@ -619,10 +619,12 @@ class Orchestrator:
              signature, not unsigned PerfMatch in general.
           4.8. **Planar separator** -- if `hints["planar_separator"]` is
              supplied (as a dict with keys ``separator``, ``side_a``,
-             ``side_b``, OR the string ``"auto"`` for v0.4 Lipton-Tarjan
-             auto-discovery), run the divide-and-conquer separator
-             decomposition; sum over (S_to_A, S_to_B, S_pairs)
-             partitions weighted by restricted-PerfMatch products.
+             ``side_b``, OR the string ``"auto"`` for the Lipton-
+             Tarjan cascade -- v0.4 BFS-layer + v0.5 spanning-tree
+             backup + v0.6 level-based + articulation backup), run
+             the divide-and-conquer separator decomposition; sum
+             over (S_to_A, S_to_B, S_pairs) partitions weighted by
+             restricted-PerfMatch products.
           4.9. **Circuit cut** -- if `hints["circuit_cut"]` is supplied
              (an iterable of edges), enumerate 2^|cut| forced-in /
              forced-out assignments via the Tutte / Lovasz-Plummer
@@ -918,15 +920,17 @@ class Orchestrator:
         # Two hint forms are recognised:
         #   - dict: {"separator": ..., "side_a": ..., "side_b": ...}
         #           explicit user-supplied separator (v0.3 behaviour).
-        #   - "auto" string: invoke Lipton-Tarjan 1979 auto-discovery
-        #           of (S, A, B) via the BFS-layer simple case (v0.4).
+        #   - "auto" string: invoke the Lipton-Tarjan cascade
+        #           (v0.4 BFS-layer simple case + v0.5 spanning-tree
+        #           backup + v0.6 D2 level-based + articulation
+        #           backup) to auto-discover (S, A, B).
         if ("planar_separator" in hints
                 and question in ("matching_count", "weighted_matching_sum")):
             try:
                 from .decompose import PlanarSeparator as _PSep
                 sep_spec = hints["planar_separator"]
                 # Distinguish auto-discovery from explicit user-supplied
-                # separator. The string "auto" is the v0.4 shorthand.
+                # separator. The string "auto" triggers the cascade.
                 if sep_spec == "auto":
                     psep = _PSep(auto=True)
                     action_label = "PlanarSeparator(auto=True)"

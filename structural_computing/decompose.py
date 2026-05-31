@@ -507,26 +507,40 @@ def _build_multibag_plan(problem: Any, td: dict) -> "DecompositionPlan":
 
 def _lipton_tarjan_separator(problem: Any
                               ) -> Tuple[Set[Any], Set[Any], Set[Any]]:
-    r"""Find a planar separator ``(S, A, B)`` via the simple-case
-    Lipton-Tarjan BFS-layer algorithm.
+    r"""Find a planar separator ``(S, A, B)`` via a three-tier
+    cascade of Lipton-Tarjan-style algorithms.
 
-    Algorithm
-    ---------
-    1. BFS-layer the graph from an arbitrary root, producing levels
-       ``L_0, L_1, ..., L_max``.
-    2. For each candidate level ``t``, compute:
-         - ``above_count`` = total vertices in ``L_0..L_{t-1}``,
-         - ``below_count`` = total vertices in ``L_{t+1}..L_max``,
-         - ``level_size`` = ``|L_t|``.
-       Return the first ``t`` such that
-         - ``above_count <= 2n/3``,
-         - ``below_count <= 2n/3``,
-         - ``level_size <= 2*sqrt(2*n)``
-       all hold.
-    3. The partition ``(S = L_t, A = above, B = below)`` is a valid
-       Lipton-Tarjan separator: every edge has both endpoints in
-       adjacent BFS levels (by the BFS distance property), so no
-       edge bypasses ``L_t`` directly from ``A`` to ``B``.
+    Backup chain
+    ------------
+    The function tries three approaches in order, returning the first
+    that produces a valid ``(S, A, B)`` partition:
+
+    1. **v0.4 simple BFS-layer case** -- the textbook Lipton-Tarjan
+       simple case. BFS-layer the graph from an arbitrary root,
+       return the first level ``L_t`` that satisfies all three LT
+       inequalities (``|above| <= 2n/3``, ``|below| <= 2n/3``,
+       ``|L_t| <= 2*sqrt(2n)``).
+    2. **v0.5 spanning-tree fundamental-cycle backup** -- when the
+       simple case fails (typically: a "fat middle level"), build
+       the BFS spanning tree, find a tree edge whose subtree split
+       is balanced (both sides at most 2n/3), use the edge's two
+       endpoints as the initial separator, then iteratively augment
+       ``S`` with non-tree-edge endpoints crossing ``A`` and ``B``.
+    3. **v0.6 D2 level-based + articulation-augmentation backup** --
+       when the v0.5 backup fails too (typically: star-like
+       ``K_{1, n}`` and book-like ``K_{2, n}`` graphs where no
+       balanced tree edge exists), iterate BFS levels smallest-
+       first; for each candidate level ``L_t`` compute the residual
+       graph's connected components; bin-pack them into ``A`` and
+       ``B`` (cap ``2n/3``); augment ``S`` with the highest-
+       residual-degree articulation vertex of any too-big component.
+
+    Algorithm details
+    -----------------
+    The simple case (step 1) relies on the BFS distance property:
+    every edge has both endpoints in adjacent BFS levels, so no edge
+    bypasses ``L_t`` directly from ``A`` to ``B``. Steps 2 and 3 do
+    explicit cross-edge checks during augmentation.
 
     Parameters
     ----------
@@ -545,22 +559,23 @@ def _lipton_tarjan_separator(problem: Any
     Raises
     ------
     ValueError
-        If the simple case fails -- specifically: (a) the graph is
-        disconnected (some vertex unreachable from the BFS root);
-        (b) no level satisfies all three Lipton-Tarjan inequalities
-        (which can happen on adversarial planar graphs and on
-        non-planar graphs). The caller should fall back to a
-        user-supplied separator in either case.
+        Only if ALL THREE tiers fail. Specifically: (a) the graph
+        is disconnected (some vertex unreachable from the BFS
+        root); (b) no level / tree edge / level-with-augmentation
+        approach produces a valid separator (which can happen on
+        adversarial planar graphs whose dual-fundamental-cycle
+        structure none of the BFS-based approaches reaches, or on
+        non-planar graphs where the LT bound doesn't apply). The
+        caller should fall back to a user-supplied separator.
 
-    Honest scope (v0.4)
-    -------------------
-    The full Lipton-Tarjan algorithm includes a spanning-tree
-    fundamental-cycle backup case that handles "fat middle level"
-    graphs. That case requires the planar embedding (rotation system)
-    and has subtle corner cases (non-cellular embeddings, degenerate
-    fundamental cycles); it is not yet implemented. For graphs where
-    the simple case fails, the framework honestly stops and asks for
-    a user-supplied separator.
+    Honest scope (still open)
+    -------------------------
+    The full Lipton-Tarjan 1979 algorithm with the planar-dual
+    fundamental-cycle argument is not yet implemented. The v0.4 /
+    v0.5 / v0.6 backup chain handles the common practical cases
+    (star, book, double-star, fat-middle-level, high-degree
+    connector planar graphs); the rare adversarial cases none of
+    these handle remain v0.7+ work.
     """
     if not isinstance(problem, dict) or "vertices" not in problem:
         raise ValueError(
@@ -730,8 +745,10 @@ def _lipton_tarjan_separator(problem: Any
 # fundamental-cycle-via-planar-dual argument. It works for many
 # practical planar graphs (notably the double-star and other graphs
 # with tree-like separator structure) but may not always find the
-# tightest separator. The full Lipton-Tarjan 1979 algorithm using
-# the planar embedding is a v0.6 deliverable.
+# tightest separator. The v0.6 D2 backup below catches the cases
+# this tier misses (star K_{1,n} and book K_{2,n} families); the
+# full Lipton-Tarjan 1979 algorithm using the planar-dual
+# fundamental-cycle argument remains open for v0.7+.
 # ---------------------------------------------------------------------------
 
 
@@ -1201,7 +1218,10 @@ class PlanarSeparator:
 
     The separator can be either USER-SUPPLIED (the v0.3 mode -- pass
     ``separator``, ``side_a``, ``side_b`` explicitly) or AUTO-DISCOVERED
-    via Lipton-Tarjan 1979 (the v0.4 mode -- pass ``auto=True``).
+    via the Lipton-Tarjan-style cascade (pass ``auto=True``). The
+    cascade has three tiers (v0.4 simple BFS-layer + v0.5 spanning-
+    tree backup + v0.6 D2 level-based + articulation backup); see
+    :func:`_lipton_tarjan_separator` for details.
 
     Mathematics
     -----------
@@ -1230,18 +1250,22 @@ class PlanarSeparator:
         plan = decomp.decompose(graph)
         answer = plan.evaluate(brute_force_count_matchings_leaf)
 
-    Use (auto / v0.4 mode)
-    ----------------------
+    Use (auto mode)
+    ---------------
     ::
 
         decomp = PlanarSeparator(auto=True)
-        plan = decomp.decompose(graph)        # Lipton-Tarjan finds (S, A, B)
+        plan = decomp.decompose(graph)        # Lipton-Tarjan cascade
         answer = plan.evaluate(brute_force_count_matchings_leaf)
 
-    The auto mode is best-effort: when the simple case of Lipton-
-    Tarjan fails (typically: adversarial planar graphs with a fat
-    middle BFS level, or non-planar inputs), ``decompose()`` raises
-    ``ValueError`` and the caller should fall back to manual mode.
+    The auto mode cascades through three tiers (v0.4 simple BFS-
+    layer, v0.5 spanning-tree backup, v0.6 D2 level-based +
+    articulation backup). It succeeds on most practical planar
+    graphs; ``decompose()`` raises ``ValueError`` only when all
+    three tiers fail (rare adversarial planar graphs whose dual-
+    fundamental-cycle structure none of these reaches, or non-
+    planar inputs). The caller should fall back to manual mode in
+    those cases.
     """
     name = "PlanarSeparator"
 
@@ -1309,13 +1333,13 @@ class PlanarSeparator:
                 f"{self.name}: expects a graph dict with 'vertices' and 'edges'"
             )
 
-        # v0.4 auto-discovery: when the constructor received auto=True,
-        # invoke Lipton-Tarjan now that the actual graph is available.
-        # We always re-discover (rather than caching) so that one
-        # auto-instance can be applied to multiple graphs. The helper
-        # raises ValueError if the simple case doesn't apply; we let
-        # that propagate so the caller knows to fall back to a
-        # user-supplied separator.
+        # Auto-discovery: when the constructor received auto=True,
+        # invoke the Lipton-Tarjan cascade now that the actual graph
+        # is available. We always re-discover (rather than caching)
+        # so that one auto-instance can be applied to multiple
+        # graphs. The helper raises ValueError only if ALL THREE
+        # cascade tiers fail; we let that propagate so the caller
+        # knows to fall back to a user-supplied separator.
         if self.auto:
             self.separator, self.side_a, self.side_b = \
                 _lipton_tarjan_separator(problem)

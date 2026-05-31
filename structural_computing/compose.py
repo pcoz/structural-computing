@@ -879,14 +879,18 @@ class HolographicBasisPair:
     # For arity 10: 10 × C(9,4) = 10 × 126 = 1260 identities.
     # (The count grows as O(n × C(n-1, 4)) = O(n^5).)
     #
-    # Honest scope (v0.5)
-    # -------------------
-    # This is the |S|=2 case only. For arity 8 and above, additional
-    # configurations with |S \ {omega}| ∈ {3, 5, ...} also give valid
-    # Plücker identities (with all 8 Pfaffians being tau values). For
-    # v0.5 we ship the |S|=2 case which covers arity 6 cleanly and
-    # contributes new identities at arity >= 8 as well. The higher-|S|
-    # configurations at arity >= 8 are deferred to v0.6.
+    # Honest scope (post-v0.6.1)
+    # --------------------------
+    # The configuration parameter is ``m := |S \ {omega}|`` which
+    # must be ODD and satisfy ``m + 5 <= n``. The viable
+    # configurations are therefore ``m ∈ {1, 3, 5, ...}`` with arity
+    # requirements ``n >= 6, 8, 10, ...`` respectively. v0.5 D1
+    # shipped m=1; v0.6 D3 shipped m=3. Counts:
+    #   - arity 6: 30 (m=1 only).
+    #   - arity 8: 560 = 280 (m=1) + 280 (m=3).
+    #   - arity 10: 5460 = 1260 (m=1) + 4200 (m=3).
+    # The full Cai-Lu §4 enumeration would also include m ∈ {5, 7,
+    # ...}; those higher configurations remain v0.7+ work.
     #
     # Practical note
     # --------------
@@ -894,12 +898,12 @@ class HolographicBasisPair:
     # enumeration plus augmented weight-1 identity already rejects
     # essentially every non-realisable signature -- the "tight
     # necessary but not provably sufficient" v0.4 caveat is more
-    # theoretical than empirical at this arity. The v0.5 contribution
-    # is therefore primarily MATHEMATICAL COMPLETENESS: the
-    # realisability_check field reports "plucker_arity_n_full" rather
-    # than the v0.4 "plucker_arity_n", signalling that the check is
-    # now a proven-sufficient one (modulo the |S|>=3 cases at arity
-    # >= 8 deferred to v0.6).
+    # theoretical than empirical at this arity. The v0.5/v0.6
+    # contribution is therefore primarily MATHEMATICAL
+    # COMPLETENESS: the realisability_check field reports
+    # "plucker_arity_n_full" rather than the v0.4
+    # "plucker_arity_n", signalling that the check now spans the
+    # full m ∈ {1, 3} augmented enumeration shipped to date.
     # -----------------------------------------------------------------
 
     @staticmethod
@@ -907,23 +911,26 @@ class HolographicBasisPair:
         r"""Enumerate the augmented-Pfaffian Plücker identities at
         EVEN arity >= 6, odd-parity branch.
 
-        For each ``p ∈ {0..arity-1}`` and each 4-subset
-        ``{a, b, c, d}`` of ``{0..arity-1} \ {p}``, returns the
-        polynomial value of the Plücker identity with
-        ``S = {p, omega}``. Each identity is a quadratic polynomial
-        in tau values.
+        Enumerates all ``m ∈ {1, 3}`` configurations (with the
+        configuration parameter ``m := |S \ {omega}|`` required to
+        be odd with ``m + 5 <= n``):
 
-        Total identity count: ``arity × C(arity-1, 4)``. For arity 6:
-        30 identities. For arity 8: 280 identities.
+          - ``m = 1``: ``S = {p, omega}``; 4-subset ranges over
+            ``{0..n-1} \ {p}``. Count: ``n × C(n-1, 4)``.
+          - ``m = 3``: ``S = {p, q, r, omega}``; 4-subset ranges
+            over ``{0..n-1} \ {p, q, r}``. Count:
+            ``C(n, 3) × C(n-3, 4)``. Requires ``n >= 8``.
 
-        Implementation note (v0.6.0)
+        Total identity count: arity 6 = 30, arity 8 = 560
+        (280 + 280), arity 10 = 5460 (1260 + 4200).
+
+        Implementation note (v0.6.1)
         ----------------------------
         Delegates to
         ``holant_tools.matchgate_identities_arity_n_odd_augmented``
         and casts the returned sympy expressions to float for the
-        orchestrator's tolerance-based check. The engine function
-        was prototype-in-place validated here in v0.5; v0.6 promoted
-        it to the engine where it belongs architecturally. This
+        orchestrator's tolerance-based check. v0.6.0 shipped the
+        m=1 case; v0.6.1 added the m=3 case in the engine. This
         wrapper preserves the float-typed return contract for
         in-package callers.
 

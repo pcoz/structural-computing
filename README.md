@@ -1,5 +1,7 @@
 # structural-computing
 
+[![PyPI](https://img.shields.io/pypi/v/structural-computing.svg)](https://pypi.org/project/structural-computing/)
+
 **Exact polynomial-time answers to combinatorial questions that today's
 tools can only sample, estimate, or give up on** — for the subset of
 problems with the right structural shape (planar, bounded-genus,
@@ -103,8 +105,10 @@ layer for users widening the in-family boundary.
 
 ## Status
 
-**Alpha** (v0.6.0a1). API may still shift before v1.0, but the public
-surface is now stable enough for downstream prototyping. 281 tests
+**Alpha** (v0.6.0a1; live on PyPI 2026-05-31). `pip install
+structural-computing` pulls in `holant-tools 0.6.1` transparently.
+API may still shift before v1.0, but the public surface is now
+stable enough for downstream prototyping. 281 tests
 across ~15 test modules pass; the orchestrator handles all three
 problem types (graphs / constraint sets / signatures) with full
 provenance, including non-symmetric signatures via the general
