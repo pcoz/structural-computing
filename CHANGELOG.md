@@ -6,10 +6,10 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 once it reaches v1.0.0; until then, the v0.x API may shift between minor
 versions.
 
-## [Unreleased] — v0.7 arc (PyPI publication unblock)
+## 2026-05-31 — v0.7 arc (PyPI publication unblock; no version bump)
 
-**No version bump.** This arc lands existing versions on PyPI for
-the first time:
+**Shipped 2026-05-31.** No version bump. This arc landed existing
+versions on PyPI for the first time:
 
 - `holant-tools 0.6.1` → PyPI (PyPI was previously at 0.5.0 from
   2026-05-27).
@@ -31,14 +31,19 @@ the first time:
 - Wheel METADATA correctly carries `Requires-Dist:
   holant-tools>=0.6.1`.
 
-### Required ordering
+### Upload ordering (verified)
 
-- `holant-tools 0.6.1` MUST land on PyPI before
-  `structural-computing 0.6.0a1`, since otherwise a clean
-  `pip install structural-computing` will fail to resolve the
-  holant-tools floor.
-- `structural-computing-bench 0.1.0a1` MUST land after
-  `structural-computing 0.6.0a1`, same reasoning.
+- `holant-tools 0.6.1` uploaded first (required for the
+  `structural-computing` dep floor to resolve).
+- `structural-computing 0.6.0a1` uploaded second (initial attempt
+  failed with 400 Bad Request because the
+  `Mathematical engine (holant-tools)` Project-URL label was 34
+  chars; PyPI core-metadata limits Project-URL keys to 32; fixed
+  by shortening to `Math engine (holant-tools)`).
+- `structural-computing-bench 0.1.0a1` uploaded third.
+- End-to-end clean-venv smoke check: `pip install
+  structural-computing-bench` pulls in
+  structural-computing 0.6.0a1 + holant-tools 0.6.1 transparently.
 
 ---
 
