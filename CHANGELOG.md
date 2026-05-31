@@ -6,6 +6,22 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 once it reaches v1.0.0; until then, the v0.x API may shift between minor
 versions.
 
+## [0.9.0a2] — 2026-05-31 (documentation-only patch — PyPI public/private boundary)
+
+**Documentation-only release.** Same code as v0.9.0a1; only the
+README on PyPI changes.
+
+### Changed
+
+- README.md: removed a line referencing "the private research
+  repo" that violated the public/private boundary rule. The
+  public packages must not reference the private research
+  parent (`admissibility-geometry`) on their PyPI pages.
+
+No code changes. No API changes. No version-floor bumps.
+
+---
+
 ## [0.9.0a1] — 2026-05-31 (v0.9 arc: full LT 1979 with explicit planar-dual)
 
 **Closes the last math-completeness gap in the Lipton-Tarjan

@@ -444,6 +444,3 @@ https://github.com/pcoz/structural-computing
   publication.
 - **v1.0.0**: API stability contract; production-ready for downstream
   packages.
-
-The long-horizon roadmap and the paradigm-level direction this package
-serves are in the private research repo.
