@@ -6,6 +6,46 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 once it reaches v1.0.0; until then, the v0.x API may shift between minor
 versions.
 
+## [0.6.0a1] — 2026-05-31 (v0.6 alpha — architectural cleanup: D1 promotion)
+
+**v0.6 starts the cleanup-and-math-completeness arc.** Deliverable 1
+(of three planned for v0.6) is now complete: the augmented-Pfaffian
+Plücker helper prototype-in-place'd in v0.5 has been promoted to
+`holant-tools.non_symmetric`, restoring the architectural principle
+that math primitives live in the mathematical engine.
+
+### D1: helper promoted to holant-tools (engine side)
+
+- `holant-tools v0.6.0` (released 2026-05-31) ships
+  `matchgate_identities_arity_n_odd_augmented(tau, n)` in
+  `holant_tools.non_symmetric`, exported at the top level. Same
+  type signature and convention as the existing v0.4 MGI siblings
+  (sympy-friendly). Wired into
+  `realizability_subvariety_non_symmetric` at even arity ≥ 6
+  odd-parity.
+
+### D1: structural-computing side (this repo)
+
+- `HolographicBasisPair._augmented_plucker_identities_arity_n_odd`
+  is now a one-line delegation to the engine function (`import
+  holant_tools as _ht; ... _ht.matchgate_identities_arity_n_odd_augmented(tau, arity)`),
+  with a float cast on the returned sympy expressions to preserve
+  the orchestrator's tolerance-based check contract.
+- The `TODO(v0.6)` marker filed in v0.5 has been removed; the
+  helper's surrounding comment now documents the v0.6 promotion.
+- `pyproject.toml`: `holant-tools` dep floor bumped from `>=0.5.0`
+  to `>=0.6.0`.
+- All 272 v0.5 tests still pass (delegation is semantically
+  equivalent to the v0.5 prototype).
+
+### Still to ship for v0.6.0a1
+
+- Deliverable 2: full Lipton-Tarjan 1979 backup with the planar
+  dual (handles fat-middle-level adversarial planar graphs that
+  v0.5's tree-edge backup can't tighten).
+- Deliverable 3: `|S| ≥ 3` augmented Plücker configurations at
+  arity ≥ 8.
+
 ## [0.5.0a1] — 2026-05-31 (v0.5 alpha — math completeness)
 
 **v0.5 closes the three honest-scope gaps documented in v0.4:**

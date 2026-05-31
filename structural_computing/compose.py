@@ -819,16 +819,21 @@ class HolographicBasisPair:
         return False, "plucker_arity_n"
 
     # -----------------------------------------------------------------
-    # v0.5 Deliverable 1: full augmented-Pfaffian Plücker enumeration
-    # at EVEN arity >= 6 odd-parity (closes Cai-Lu §4 d-admissibility).
+    # Full augmented-Pfaffian Plücker enumeration at EVEN arity >= 6
+    # odd-parity (closes Cai-Lu §4 d-admissibility, |S|=2 configuration).
     # -----------------------------------------------------------------
     #
-    # TODO(v0.6): promote the `_augmented_plucker_identities_arity_n_odd`
-    # helper below to `holant_tools.non_symmetric`, mirroring how v0.4's
-    # MGI check consumes `matchgate_identity_arity_4_{even,odd}` etc.
-    # from the engine repo. The math primitives belong in the
-    # mathematical engine; this is prototype-in-place pending v0.5
-    # release and empirical validation.
+    # Prototyped in `structural-computing v0.5.0a1` (2026-05-31);
+    # **promoted to `holant_tools.non_symmetric` in v0.6.0** (mirroring
+    # how v0.4's MGI check consumes `matchgate_identity_arity_4_{even,odd}`
+    # etc. from the engine repo). The helper below is now a thin
+    # delegation wrapper that calls the engine function and casts the
+    # returned sympy expressions to floats for the orchestrator's
+    # tolerance-based check.
+    #
+    # The math primitives now live in their architecturally-correct
+    # home (the mathematical engine). Per the v0.5 → v0.6 cleanup
+    # commitment filed in admissibility-geometry's decision_log.md.
     # -----------------------------------------------------------------
     #
     # The math, in one paragraph
@@ -899,16 +904,28 @@ class HolographicBasisPair:
 
     @staticmethod
     def _augmented_plucker_identities_arity_n_odd(tau, arity):
-        r"""Enumerate the v0.5 augmented-Pfaffian Plücker identities
-        at EVEN arity >= 6, odd-parity branch.
+        r"""Enumerate the augmented-Pfaffian Plücker identities at
+        EVEN arity >= 6, odd-parity branch.
 
         For each ``p ∈ {0..arity-1}`` and each 4-subset
         ``{a, b, c, d}`` of ``{0..arity-1} \ {p}``, returns the
-        polynomial value of the Plücker identity with ``S = {p, omega}``.
-        Each identity is a quadratic polynomial in tau values.
+        polynomial value of the Plücker identity with
+        ``S = {p, omega}``. Each identity is a quadratic polynomial
+        in tau values.
 
         Total identity count: ``arity × C(arity-1, 4)``. For arity 6:
         30 identities. For arity 8: 280 identities.
+
+        Implementation note (v0.6.0)
+        ----------------------------
+        Delegates to
+        ``holant_tools.matchgate_identities_arity_n_odd_augmented``
+        and casts the returned sympy expressions to float for the
+        orchestrator's tolerance-based check. The engine function
+        was prototype-in-place validated here in v0.5; v0.6 promoted
+        it to the engine where it belongs architecturally. This
+        wrapper preserves the float-typed return contract for
+        in-package callers.
 
         Returns
         -------
@@ -916,50 +933,9 @@ class HolographicBasisPair:
             One value per identity; a matchgate-realisable signature
             has all values equal to 0.
         """
-        from itertools import combinations
-
-        n = arity
-        omega_idx = n   # virtual augmenting position
-
-        def _T_to_bitstring(T):
-            """Map an augmented Pfaffian subset T to a bit string
-            via the correspondence (1) above: tau(b) = Pf(T) where
-            T = complement(b) in {0..n-1} ∪ {omega}, i.e. b has 1s
-            at positions ABSENT from T (excluding omega)."""
-            T_set = set(T)
-            T_set.discard(omega_idx)
-            return tuple(0 if i in T_set else 1 for i in range(n))
-
-        identities = []
-        positions = list(range(n))
-        for p in positions:
-            remaining = [i for i in positions if i != p]
-            for abcd in combinations(remaining, 4):
-                a, b, c, d = abcd
-                # S = {p, omega}; map each T = S ∪ X (X ⊆ {a,b,c,d})
-                # to the corresponding tau bit string.
-                S = [p, omega_idx]
-                b_S    = _T_to_bitstring(S)
-                b_Sabcd = _T_to_bitstring(S + list(abcd))
-                b_Sab  = _T_to_bitstring(S + [a, b])
-                b_Scd  = _T_to_bitstring(S + [c, d])
-                b_Sac  = _T_to_bitstring(S + [a, c])
-                b_Sbd  = _T_to_bitstring(S + [b, d])
-                b_Sad  = _T_to_bitstring(S + [a, d])
-                b_Sbc  = _T_to_bitstring(S + [b, c])
-                # Plücker quadratic identity. Signs come from the
-                # standard ordered Pfaffian definition; verified by
-                # symbolic Pfaffian computation on a generic 7x7 skew
-                # matrix during development (see the docstring's
-                # "Practical note" for the verification approach).
-                ident = (
-                    float(tau[b_S]) * float(tau[b_Sabcd])
-                    - float(tau[b_Sab]) * float(tau[b_Scd])
-                    + float(tau[b_Sac]) * float(tau[b_Sbd])
-                    - float(tau[b_Sad]) * float(tau[b_Sbc])
-                )
-                identities.append(ident)
-        return identities
+        import holant_tools as _ht
+        exprs = _ht.matchgate_identities_arity_n_odd_augmented(tau, arity)
+        return [float(expr) for expr in exprs]
 
     # -----------------------------------------------------------------
     # Auto-discovery of T (v0.3 + v0.4 -- practical fragment of Cai-Lu's SRP)
