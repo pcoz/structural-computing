@@ -10,6 +10,31 @@ bit-identical reproducible numbers in milliseconds-to-seconds. When
 inapplicable, it stops honestly with a clear pointer to the right
 external tool. No silent approximation.
 
+> 📘 **New here?** Read the book first: [**Declarative Structural
+> Computing — A Practitioner's Guide**](docs/book.md) (17 chapters,
+> ~6 hours end-to-end; a 1-hour skim is enough to decide whether the
+> framework helps your work).
+>
+> The book explains the *paradigm* this package embodies — what
+> happens when entire codebases (100,000+ lines of Monte Carlo
+> simulators, MIP timeouts, hand-rolled scheduling heuristics)
+> collapse to a few lines of declarative query, in the same way
+> SQL collapsed 1970s data-iteration code. It's written for
+> regular humans — not mathematicians — with concrete characters
+> (Sara at a reliability-software company, Maya at a logistics
+> company, a hospital scheduling surgeries), three runnable
+> worked examples ([reliability](book/examples/09_network_reliability/),
+> [scheduling](book/examples/10_schedule_optimisation/),
+> [CP-SAT pre-flight](book/examples/11_cpsat_preflight/)), and
+> a [one-page business case](book/01a-the-business-case-in-one-page.md)
+> with concrete dollar figures.
+>
+> **Three reading paths** (in the [index](docs/book.md)):
+> *business analyst* (skip the code; ~2 hours), *engineer*
+> (read the whole thing; ~6 hours), *CTO/VP Engineering*
+> (preface + Ch 1, 1a, 4, 15; ~45 minutes for the
+> build-versus-buy reframe).
+
 ## What this lets you do
 
 - **Compare two configurations exactly** even when the difference is
