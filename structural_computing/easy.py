@@ -43,6 +43,7 @@ import holant_tools
 
 from .classify import (Classification, classify_graph,
                        classify_constraint_set, classify_signature)
+from .orchestrator import Orchestrator, NoKnownReduction
 from .route import route as route_classification
 from .trace import RichTrace
 from .verifier import brute_force_count_matchings
@@ -257,10 +258,38 @@ def _bits_to_int(bits: np.ndarray) -> int:
 
 
 class StructuralComputer:
-    """The friendly entry point. Construct one; call the methods you need."""
+    """The friendly entry point. Construct one; call the methods you need.
+
+    Internally maintains an `Orchestrator` instance (since v0.12) that
+    routes most evaluation methods through the registered leaf-evaluator
+    family. Direct-call code paths are retained only for methods that
+    are not single-leaf-evaluation questions (e.g., `audit`, `compare`,
+    `count_matchings_hybrid`).
+    """
 
     def __init__(self):
         self._last_classification: Optional[Classification] = None
+        # v0.12: single Orchestrator instance powers method delegation.
+        self._orchestrator = Orchestrator()
+
+    def _delegate(self, problem: Any, question: str) -> Any:
+        """Run a single-leaf-evaluation question through the orchestrator
+        and return the bare answer.
+
+        Used by most wrapper methods (count_matchings, witness, the
+        tropical family, etc.) to avoid duplicating dispatch logic.
+        The orchestrator emits a full audit trail in
+        ``OrchestratorResult.workflow_trace``; callers needing that
+        trail should use ``self._orchestrator.evaluate(...)`` directly.
+
+        Raises ``NoKnownReduction`` if the orchestrator can't reach
+        an in-family answer.
+        """
+        result = self._orchestrator.evaluate(problem, question)
+        # Keep last classification in sync so .classify() callers see
+        # the most-recent dispatch tier.
+        self._last_classification = result.classification
+        return result.answer
 
     # -- structural inspection ----------------------------------------------
 
@@ -291,56 +320,45 @@ class StructuralComputer:
     # -- counting / probability ---------------------------------------------
 
     def count_matchings(self, graph: GraphLike) -> int:
-        """How many perfect matchings does this graph admit? Exact, integer."""
+        """How many perfect matchings does this graph admit? Exact,
+        integer.
+
+        Delegates to the Orchestrator's `(T2/T4, matching_count)` leaf
+        evaluator. The leaf dispatches between Kasteleyn-Pfaffian
+        (planar, O(n³)) and brute force (otherwise)."""
         vertices, edges, rotation = _normalise_graph(graph, rotation_required=True)
         cls = classify_graph(rotation)
         self._last_classification = cls
         if not cls.in_family:
             raise NotInFamily(cls)
-        g = cls.meters.get("genus", 0)
-        if g == 0:
-            K = holant_tools.kasteleyn_orient(vertices, edges, rotation)
-            return abs(int(holant_tools.exact_planar_pfaffian(K)))
-        # For genus >= 1, holant-tools' genus-g pipeline can be finicky on
-        # arbitrary rotation systems; fall back to brute force at small n.
-        # (A future version of this wrapper picks Klein arc when available.)
-        return brute_force_count_matchings(vertices, edges)
+        problem = {"vertices": vertices, "edges": edges, "rotation": rotation}
+        return self._delegate(problem, "matching_count")
 
     def tail_probability(self, graph: GraphLike, p_fail: float) -> float:
         """Exact P(NO perfect matching survives) under independent edge
-        failure at probability `p_fail`. Brute-force enumeration of edge
-        subsets at small |E|; the algorithm scales to larger instances via
-        the matching polynomial, but this wrapper uses the small-n form."""
+        failure at probability `p_fail`. Delegates to the Orchestrator's
+        `(T2/T4, tail_probability)` leaf evaluator, which enumerates
+        edge subsets at small |E|."""
         vertices, edges, _ = _normalise_graph(graph)
         n_edges = len(edges)
         if n_edges > 24:
             raise ValueError(f"|E| = {n_edges} too large for this wrapper's exact "
                               f"enumeration (cap = 24); larger instances need the "
                               f"matching-polynomial form (Year-6 deliverable).")
-        total = 0.0
-        for mask in range(2 ** n_edges):
-            surviving = [edges[i] for i in range(n_edges) if (mask >> i) & 1]
-            k_failed = n_edges - len(surviving)
-            weight = (p_fail ** k_failed) * ((1 - p_fail) ** (n_edges - k_failed))
-            if brute_force_count_matchings(vertices, surviving) == 0:
-                total += weight
-        return total
+        problem = {"vertices": vertices, "edges": edges, "p_fail": p_fail}
+        return self._delegate(problem, "tail_probability")
 
     # -- witnesses / structural decisions -----------------------------------
 
     def witness(self, graph: GraphLike) -> List[Tuple[Any, Any]]:
-        """Find one perfect matching, if any exists. Returns the edges."""
+        """Find one perfect matching, if any exists. Returns the edges.
+
+        Delegates to the Orchestrator's `(T2/T4, witness)` leaf evaluator,
+        which uses the tropical Pfaffian dispatch (Hungarian / Edmonds)
+        to find a matching."""
         vertices, edges, _ = _normalise_graph(graph)
-        n = len(vertices)
-        idx = {v: i for i, v in enumerate(vertices)}
-        W = [[math.inf] * n for _ in range(n)]
-        for (u, w) in edges:
-            i, j = idx[u], idx[w]
-            W[i][j] = W[j][i] = 1.0
-        cost, matching = holant_tools.min_weight_perfect_matching(W)
-        if matching is None:
-            return []
-        return [(vertices[i], vertices[j]) for (i, j) in matching]
+        problem = {"vertices": vertices, "edges": edges}
+        return self._delegate(problem, "witness")
 
     # -- tropical / min-cost optimisation (v0.10) ---------------------------
 
@@ -352,9 +370,10 @@ class StructuralComputer:
 
         Same admissible-set machinery as ``matching_count`` and
         ``witness``, but with the tropical (min, +) semiring instead of
-        the standard (+, ×). Dispatches internally between Hungarian
-        (for bipartite K_{n,n} inputs) and Edmonds blossom (for general
-        non-bipartite), both polynomial-time and exact.
+        the standard (+, ×). Delegates to the Orchestrator's
+        ``(T2/T4, min_weight_matching)`` leaf evaluator, which
+        dispatches internally between Hungarian (bipartite) and
+        Edmonds blossom (general non-bipartite).
 
         Args:
             graph: any graph format ``_normalise_graph`` accepts.
@@ -363,30 +382,11 @@ class StructuralComputer:
 
         Returns:
             ``{"cost": float, "matching": [(u, v), ...],
-              "feasible": bool}``. Infeasible (no perfect matching
-            exists) returns feasible=False with cost=matching=None.
+              "feasible": bool}``.
         """
         vertices, edges, _ = _normalise_graph(graph)
-        n = len(vertices)
-        if n % 2 != 0:
-            return {"cost": None, "matching": None, "feasible": False}
-        idx = {v: i for i, v in enumerate(vertices)}
-        W = [[math.inf] * n for _ in range(n)]
-        weights = weights or {}
-        for (u, v) in edges:
-            i, j = idx[u], idx[v]
-            w = weights.get((u, v))
-            if w is None:
-                w = weights.get((v, u), 1.0)
-            W[i][j] = W[j][i] = float(w)
-        cost, matching = holant_tools.min_weight_perfect_matching(W)
-        if matching is None:
-            return {"cost": None, "matching": None, "feasible": False}
-        return {
-            "cost": float(cost),
-            "matching": [(vertices[i], vertices[j]) for (i, j) in matching],
-            "feasible": True,
-        }
+        problem = {"vertices": vertices, "edges": edges, "weights": weights or {}}
+        return self._delegate(problem, "min_weight_matching")
 
     def min_cost_schedule(self,
                             instance: Any,
@@ -397,64 +397,41 @@ class StructuralComputer:
                             forbidden_edges: Optional[set] = None,
                             ) -> Dict[str, Any]:
         """Exact polynomial-time minimum-cost schedule on a
-        ``holant_tools.SchedulingInstance``.
-
-        Wraps ``holant_tools.min_cost_schedule``. Accepts the same
-        per-job constraints (``allowed_machines``, ``time_windows``,
-        ``forbidden_edges``) as the engine entry point.
+        ``holant_tools.SchedulingInstance``. Delegates to the
+        Orchestrator's ``(T2/T4, min_cost_schedule)`` leaf evaluator.
 
         Returns ``{"cost": float, "schedule": ..., "feasible": bool}``.
         """
-        result = holant_tools.min_cost_schedule(
-            instance, cost_fn,
-            allowed_machines=allowed_machines,
-            time_windows=time_windows,
-            forbidden_edges=forbidden_edges,
-        )
-        if hasattr(result, "feasible") and not result.feasible:
-            return {"cost": None, "schedule": None, "feasible": False}
-        # holant-tools' MinCostScheduleResult uses `min_cost` and `schedule`.
-        cost_val = getattr(result, "min_cost", None)
-        if cost_val is None:
-            cost_val = getattr(result, "cost", None)
-        return {
-            "cost": float(cost_val) if cost_val is not None else None,
-            "schedule": getattr(result, "schedule", None),
-            "feasible": True,
+        problem = {
+            "instance": instance,
+            "cost_fn": cost_fn,
+            "allowed_machines": allowed_machines,
+            "time_windows": time_windows,
+            "forbidden_edges": forbidden_edges,
         }
+        return self._delegate(problem, "min_cost_schedule")
 
     def min_cost_flow(self, instance: Any) -> Dict[str, Any]:
         """Exact polynomial-time minimum-cost flow on a
-        ``holant_tools.MinCostFlowInstance``.
+        ``holant_tools.MinCostFlowInstance``. Delegates to the
+        Orchestrator's ``(T2/T4, min_cost_flow)`` leaf evaluator.
 
         Returns ``{"cost", "flow", "feasible"}``.
         """
-        result = holant_tools.min_cost_flow(instance)
-        if hasattr(result, "feasible") and not result.feasible:
-            return {"cost": None, "flow": None, "feasible": False}
-        return {
-            "cost": float(result.min_cost) if result.min_cost is not None else None,
-            "flow": getattr(result, "flow", None),
-            "feasible": True,
-        }
+        return self._delegate({"instance": instance}, "min_cost_flow")
 
     def min_cost_roster(self,
                           instance: Any,
                           preference_fn: Callable[[Any, Any], float],
                           ) -> Dict[str, Any]:
         """Exact polynomial-time minimum-cost rostering on a
-        ``holant_tools.RosteringInstance``.
+        ``holant_tools.RosteringInstance``. Delegates to the
+        Orchestrator's ``(T2/T4, min_cost_roster)`` leaf evaluator.
 
         Returns ``{"cost", "roster", "feasible"}``.
         """
-        result = holant_tools.min_cost_roster(instance, preference_fn)
-        if hasattr(result, "feasible") and not result.feasible:
-            return {"cost": None, "roster": None, "feasible": False}
-        return {
-            "cost": float(result.min_cost) if result.min_cost is not None else None,
-            "roster": getattr(result, "roster", None),
-            "feasible": True,
-        }
+        problem = {"instance": instance, "preference_fn": preference_fn}
+        return self._delegate(problem, "min_cost_roster")
 
     def min_cost_dedup(self,
                          instance: Any,
@@ -462,19 +439,13 @@ class StructuralComputer:
                          ) -> Dict[str, Any]:
         """Exact polynomial-time minimum-cost record-to-entity assignment
         for entity deduplication on a ``holant_tools.MDMInstance``.
+        Delegates to the Orchestrator's ``(T2/T4, min_cost_dedup)``
+        leaf evaluator.
 
         Returns ``{"cost", "assignment", "entity_groups", "feasible"}``.
         """
-        result = holant_tools.min_cost_dedup(instance, similarity_fn)
-        if hasattr(result, "feasible") and not result.feasible:
-            return {"cost": None, "assignment": None,
-                    "entity_groups": None, "feasible": False}
-        return {
-            "cost": float(result.min_cost) if result.min_cost is not None else None,
-            "assignment": getattr(result, "assignment", None),
-            "entity_groups": getattr(result, "entity_groups", None),
-            "feasible": True,
-        }
+        problem = {"instance": instance, "similarity_fn": similarity_fn}
+        return self._delegate(problem, "min_cost_dedup")
 
     def tropical_instance_coordinates(self,
                                         instance: Any,
@@ -484,23 +455,25 @@ class StructuralComputer:
                                         ) -> Any:
         """One-call diagnostic: "is this SchedulingInstance structurally
         well-suited for tropical optimisation?" Returns the
-        ``TropicalInstanceCoordinates`` dataclass with the four-coordinate
-        viewing-frame apparatus plus tropical-rank diagnostics.
+        ``TropicalInstanceCoordinates`` dataclass directly. Delegates
+        to the Orchestrator's
+        ``(T2/T4, tropical_instance_coordinates)`` leaf evaluator.
         """
-        return holant_tools.tropical_instance_coordinates(
-            instance, cost_fn, compute_field_distance=compute_field_distance,
-        )
+        problem = {
+            "instance": instance,
+            "cost_fn": cost_fn,
+            "compute_field_distance": compute_field_distance,
+        }
+        return self._delegate(problem, "tropical_instance_coordinates")
 
     def single_points_of_failure(self, graph: GraphLike) -> List[Tuple[Any, Any]]:
         """Edges whose removal eliminates all perfect matchings -- the
-        structural single points of failure."""
+        structural single points of failure. Delegates to the
+        Orchestrator's ``(T2/T4, single_points_of_failure)`` leaf
+        evaluator."""
         vertices, edges, _ = _normalise_graph(graph)
-        spofs = []
-        for e in edges:
-            sub = [x for x in edges if x != e]
-            if brute_force_count_matchings(vertices, sub) == 0:
-                spofs.append(e)
-        return spofs
+        problem = {"vertices": vertices, "edges": edges}
+        return self._delegate(problem, "single_points_of_failure")
 
     # -- comparison / distinguishability ------------------------------------
 
@@ -568,41 +541,14 @@ class StructuralComputer:
         cls = self.classify_constraints(A=A, b=b, Q=Q, c=c, modulus=modulus)
         if not cls.in_family:
             raise NotInFamily(cls)
+        # Pre-coerce to numpy arrays before delegating; the classifier
+        # and leaf evaluators expect numpy types.
         A_arr = _as_array(A) if A is not None else None
         b_arr = _as_array(b) if b is not None else None
-        n = int(A_arr.shape[1]) if (A_arr is not None and A_arr.size) else 0
-        if n == 0:
-            return 1 if Q is None or not Q else 0
-        if Q is None or not Q:
-            # T0: linear only; count = 2^(n - rank(A)).
-            rank = _gf2_rank(A_arr)
-            # Check feasibility: rank([A | b]) must equal rank(A).
-            Aug = np.hstack([A_arr, b_arr.reshape(-1, 1)]) if b_arr is not None else A_arr
-            if _gf2_rank(Aug) != rank:
-                return 0
-            return 2 ** (n - rank)
-        # T1: brute force at small n.
-        if n > 24:
-            raise ValueError(
-                f"count_solutions: n = {n} too large for the wrapper's "
-                f"brute-force quadratic enumeration (cap = 24). The "
-                f"reduction layer for T1 -> T0 is on the roadmap."
-            )
-        Q_list = [_as_array(Qi) for Qi in Q]
-        c_arr = _as_array(c) if c is not None else np.zeros(len(Q_list), dtype=int)
-        count = 0
-        for x in range(2 ** n):
-            bits = np.array([(x >> (n - 1 - i)) & 1 for i in range(n)], dtype=int)
-            if b_arr is not None and A_arr is not None:
-                if not np.array_equal((A_arr @ bits) % 2, b_arr % 2):
-                    continue
-            ok = True
-            for Qi, ci in zip(Q_list, c_arr):
-                if (bits @ Qi @ bits) % 2 != ci % 2:
-                    ok = False; break
-            if ok:
-                count += 1
-        return count
+        Q_arr = [_as_array(Qi) for Qi in Q] if Q else None
+        c_arr = _as_array(c) if c is not None else None
+        problem = {"A": A_arr, "b": b_arr, "Q": Q_arr, "c": c_arr, "modulus": modulus}
+        return self._delegate(problem, "count_solutions")
 
     def find_witness_solution(self,
                                A=None,
@@ -612,40 +558,21 @@ class StructuralComputer:
                                modulus: int = 2) -> Optional[int]:
         """Find one assignment satisfying the constraint set, returned as
         an integer with MSB-first bit convention (bit 0 = MSB). Returns
-        None if no solution exists.
-
-        For T0 (GF(2)-affine), uses Gaussian elimination to find a witness
-        in poly time. For T1 (with quadratic constraints), brute-forces
-        at small n. Honest-stops via NotInFamily for mod-p != 2."""
+        None if no solution exists. Delegates to the Orchestrator's
+        ``(T0/T1, find_witness)`` leaf evaluator (Gauss-Jordan at T0,
+        brute force at T1). Honest-stops via NotInFamily for
+        mod-p != 2."""
         cls = self.classify_constraints(A=A, b=b, Q=Q, c=c, modulus=modulus)
         if not cls.in_family:
             raise NotInFamily(cls)
+        # Pre-coerce to numpy arrays before delegating; the classifier
+        # and leaf evaluators expect numpy types.
         A_arr = _as_array(A) if A is not None else None
         b_arr = _as_array(b) if b is not None else None
-        n = int(A_arr.shape[1]) if (A_arr is not None and A_arr.size) else 0
-        if n == 0:
-            return 0 if (Q is None or not Q) else None
-        if Q is None or not Q:
-            # T0: Gaussian elimination in poly time.
-            x = _gf2_solve_one(A_arr, b_arr)
-            if x is None:
-                return None
-            return _bits_to_int(x)
-        # T1: brute force at small n.
-        if n > 24:
-            raise ValueError(
-                f"find_witness_solution: n = {n} too large for brute-force quadratic search."
-            )
-        Q_list = [_as_array(Qi) for Qi in Q]
-        c_arr = _as_array(c) if c is not None else np.zeros(len(Q_list), dtype=int)
-        for x in range(2 ** n):
-            bits = np.array([(x >> (n - 1 - i)) & 1 for i in range(n)], dtype=int)
-            if b_arr is not None and A_arr is not None:
-                if not np.array_equal((A_arr @ bits) % 2, b_arr % 2):
-                    continue
-            if all((bits @ Qi @ bits) % 2 == ci % 2 for Qi, ci in zip(Q_list, c_arr)):
-                return x
-        return None
+        Q_arr = [_as_array(Qi) for Qi in Q] if Q else None
+        c_arr = _as_array(c) if c is not None else None
+        problem = {"A": A_arr, "b": b_arr, "Q": Q_arr, "c": c_arr, "modulus": modulus}
+        return self._delegate(problem, "find_witness")
 
     def list_solutions(self,
                         A=None,
@@ -654,29 +581,20 @@ class StructuralComputer:
                         c=None,
                         modulus: int = 2) -> List[int]:
         """All assignments satisfying the constraint set. Brute-force
-        enumeration at small n (cap n <= 20; raises ValueError above)."""
+        enumeration at small n (cap n <= 20; raises ValueError above).
+        Delegates to the Orchestrator's ``(T0/T1, list_solutions)`` leaf
+        evaluator."""
         cls = self.classify_constraints(A=A, b=b, Q=Q, c=c, modulus=modulus)
         if not cls.in_family:
             raise NotInFamily(cls)
+        # Pre-coerce to numpy arrays before delegating; the classifier
+        # and leaf evaluators expect numpy types.
         A_arr = _as_array(A) if A is not None else None
         b_arr = _as_array(b) if b is not None else None
-        Q_list = [_as_array(Qi) for Qi in Q] if Q else []
-        c_arr = _as_array(c) if c is not None else np.zeros(len(Q_list), dtype=int)
-        n = int(A_arr.shape[1]) if (A_arr is not None and A_arr.size) else 0
-        if n > 20:
-            raise ValueError(
-                f"list_solutions: n = {n} too large for full enumeration "
-                f"(cap = 20). Use count_solutions or find_witness_solution instead."
-            )
-        out = []
-        for x in range(2 ** n):
-            bits = np.array([(x >> (n - 1 - i)) & 1 for i in range(n)], dtype=int)
-            if b_arr is not None and A_arr is not None:
-                if not np.array_equal((A_arr @ bits) % 2, b_arr % 2):
-                    continue
-            if all((bits @ Qi @ bits) % 2 == ci % 2 for Qi, ci in zip(Q_list, c_arr)):
-                out.append(x)
-        return out
+        Q_arr = [_as_array(Qi) for Qi in Q] if Q else None
+        c_arr = _as_array(c) if c is not None else None
+        problem = {"A": A_arr, "b": b_arr, "Q": Q_arr, "c": c_arr, "modulus": modulus}
+        return self._delegate(problem, "list_solutions")
 
     # -- hybrid decomposition (matching count on non-planar graphs) ---------
 

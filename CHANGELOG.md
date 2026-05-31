@@ -6,6 +6,93 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 once it reaches v1.0.0; until then, the v0.x API may shift between minor
 versions.
 
+## [0.12.0a1] — 2026-05-31 (v0.12 arc: wrapper consolidation)
+
+**Architectural cleanup.** `StructuralComputer` now holds an
+internal `Orchestrator` instance and delegates most evaluation
+methods through it. Previously the wrapper and the orchestrator
+duplicated evaluation logic for the same questions (matching
+count, witness, single points of failure, the tropical family,
+constraint solutions). v0.12 establishes a single source of
+truth.
+
+### Added
+
+- **`StructuralComputer._orchestrator`** — internal `Orchestrator`
+  instance shared by every method that resolves a single (tier,
+  question) pair.
+- **`StructuralComputer._delegate(problem, question) -> Any`** —
+  private helper that runs the orchestrator on a problem dict
+  and returns the bare answer. Also keeps
+  `_last_classification` in sync with the orchestrator's
+  dispatch tier.
+
+### Changed (refactored to delegate)
+
+- `count_matchings` — now goes through
+  `(T2/T4, matching_count)`. The leaf evaluator was upgraded to
+  use Kasteleyn-Pfaffian (FKT, O(n³)) when a rotation system is
+  present and the graph is planar; brute force otherwise.
+  Behaviour-preserving on existing call sites.
+- `tail_probability` — delegates to `(T2/T4, tail_probability)`.
+  The `p_fail` argument now travels inside the problem dict.
+- `witness` — delegates to `(T2/T4, witness)`.
+- `single_points_of_failure` — delegates to
+  `(T2/T4, single_points_of_failure)`.
+- `min_weight_matching` — delegates to
+  `(T2/T4, min_weight_matching)`.
+- `min_cost_schedule` — delegates to `(T2/T4, min_cost_schedule)`.
+- `min_cost_flow` — delegates to `(T2/T4, min_cost_flow)`.
+- `min_cost_roster` — delegates to `(T2/T4, min_cost_roster)`.
+- `min_cost_dedup` — delegates to `(T2/T4, min_cost_dedup)`.
+- `tropical_instance_coordinates` — delegates to
+  `(T2/T4, tropical_instance_coordinates)`.
+- `count_solutions` — delegates to `(T0/T1, count_solutions)`
+  (with pre-coercion of A/b/Q/c to numpy arrays).
+- `find_witness_solution` — delegates to
+  `(T0/T1, find_witness)`.
+- `list_solutions` — delegates to `(T0/T1, list_solutions)`.
+
+### Orchestrator-side classifier extension
+
+`Orchestrator._classify_problem` now handles two additional
+problem-dict shapes that the wrapper produces:
+
+- Tropical instance-based dicts (`{"instance": ...}`) — routed
+  to T2 with `problem_kind = "tropical_instance"` so the
+  registered tropical leaf evaluators fire.
+- Graph dicts without a rotation system (`{"vertices": ...,
+  "edges": ...}`) — routed to T2 with `problem_kind =
+  "graph_no_rotation"` for direct leaf dispatch.
+
+### Methods NOT refactored (intentionally)
+
+- `classify`, `explain` — structural inspection, not single-leaf
+  evaluation.
+- `compare` — meta-method that calls `tail_probability` twice.
+- `audit` — meta-method that calls multiple wrapper methods.
+- `count_matchings_hybrid` — multi-step reduction
+  (HybridDecomposition).
+- `classify_constraints`, `classify_function`, `matchgate_rank`,
+  `is_matchgate_realisable` — direct classification calls; the
+  orchestrator round-trip would add no value.
+
+### Test count
+
+- All 23 smoke tests + 45 constraint tests pass after the
+  refactor. No behaviour change visible to callers.
+
+### Architectural benefit
+
+Going forward, any new question registered in
+`DEFAULT_LEAF_REGISTRY` is automatically reachable through the
+wrapper by writing a thin `sc.foo(...)` that builds a problem
+dict and calls `self._delegate(...)`. The orchestrator becomes
+the single dispatch surface; the wrapper becomes the thin
+ergonomic layer.
+
+---
+
 ## [0.11.0a1] — 2026-05-31 (v0.11 arc: finish tropical wiring)
 
 **Closes the tropical-wiring gap left open by v0.10.** v0.10 wired

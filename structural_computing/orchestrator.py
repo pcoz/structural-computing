@@ -207,10 +207,39 @@ LeafEvaluator = Callable[[Any, str], Any]
 # ---------- Graph leaf evaluators ------------------------------------------
 
 def _matching_count_leaf(problem: Any, question: str) -> int:
-    """matching_count on a graph (T2 or T4): brute force at small n."""
-    if isinstance(problem, dict) and "vertices" in problem:
-        return brute_force_count_matchings(problem["vertices"], problem["edges"])
-    raise ValueError(f"matching_count_leaf expects a graph dict; got {type(problem).__name__}")
+    """matching_count on a graph (T2 or T4).
+
+    Smart-path dispatch:
+      * Planar input (rotation system present AND genus 0): use the FKT
+        / Kasteleyn-Pfaffian path via holant-tools' planar primitive
+        — O(n^3) exact rather than 2^|E| brute force.
+      * Otherwise: brute force at small n (the existing fallback).
+
+    The planar path matches the StructuralComputer wrapper's
+    behaviour pre-v0.12; consolidating it here lets the wrapper
+    delegate cleanly.
+    """
+    if not (isinstance(problem, dict) and "vertices" in problem):
+        raise ValueError(
+            f"matching_count_leaf expects a graph dict; "
+            f"got {type(problem).__name__}"
+        )
+    vertices = problem["vertices"]
+    edges = problem["edges"]
+    rotation = problem.get("rotation")
+    # Planar smart path: rotation system supplied + genus 0 confirmed.
+    if rotation is not None:
+        try:
+            import holant_tools
+            gres = holant_tools.genus_from_rotation_system(rotation)
+            if gres.genus == 0:
+                K = holant_tools.kasteleyn_orient(vertices, edges, rotation)
+                return abs(int(holant_tools.exact_planar_pfaffian(K)))
+        except Exception:
+            # Any failure in the planar path falls back to brute force;
+            # the leaf must always return an answer for in-family inputs.
+            pass
+    return brute_force_count_matchings(vertices, edges)
 
 
 def _weighted_matching_sum_leaf(problem: Any, question: str) -> float:
@@ -1420,6 +1449,41 @@ class Orchestrator:
                 reasoning=(f"multi-signature problem ({len(problem['signatures'])} "
                             f"symmetric signatures) for SRP common-basis search"),
             ), "classify_signatures_multi")
+        # v0.12: tropical instance-based dicts (no rotation/A/values).
+        # These come from the StructuralComputer wrappers for the
+        # tropical family: min_cost_flow, min_cost_roster,
+        # min_cost_dedup, min_cost_schedule, tropical_instance_coordinates.
+        # The dispatcher routes them to T2 so the registered tropical
+        # leaf evaluators fire; the leaves themselves consume the
+        # `instance` (a MinCostFlowInstance / RosteringInstance /
+        # MDMInstance / SchedulingInstance) and do the heavy lifting.
+        if "instance" in problem:
+            return (Classification(
+                tier="T2",
+                meters={"problem_kind": "tropical_instance",
+                        "instance_type": type(problem["instance"]).__name__},
+                in_family=True,
+                reasoning=(f"tropical instance-based problem "
+                            f"({type(problem['instance']).__name__}) "
+                            f"routed to T2 for tropical-leaf dispatch"),
+            ), "classify_tropical_instance")
+        # v0.12: graph dicts WITHOUT a rotation system, supplied by the
+        # weighted/tropical wrapper methods (min_weight_matching etc.)
+        # and by the legacy graph wrappers for problems that don't
+        # carry an embedding. Route to T2 with the understanding that
+        # the leaf evaluator will treat the input as a generic
+        # (possibly non-planar) graph.
+        if "vertices" in problem and "edges" in problem:
+            return (Classification(
+                tier="T2",
+                meters={"problem_kind": "graph_no_rotation",
+                        "n_vertices": len(problem["vertices"]),
+                        "n_edges": len(problem["edges"])},
+                in_family=True,
+                reasoning=(f"graph with {len(problem['vertices'])} vertices "
+                            f"and {len(problem['edges'])} edges (no rotation "
+                            f"supplied); routed to T2 for direct leaf dispatch"),
+            ), "classify_graph_no_rotation")
         return None, ""
 
     def _try_hybrid_decomposition(self, problem, extra_edges, *, origin):
