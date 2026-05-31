@@ -6,6 +6,42 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 once it reaches v1.0.0; until then, the v0.x API may shift between minor
 versions.
 
+## [Unreleased] — v0.7 arc (PyPI publication unblock)
+
+**No version bump.** This arc lands existing versions on PyPI for
+the first time:
+
+- `holant-tools 0.6.1` → PyPI (PyPI was previously at 0.5.0 from
+  2026-05-27).
+- `structural-computing 0.6.0a1` → PyPI (first-ever upload of this
+  package).
+- `structural-computing-bench 0.1.0a1` → PyPI (first-ever upload;
+  dep floor bumped to `structural-computing>=0.6.0a1`).
+
+### Added (this repo)
+
+- `.github/workflows/publish.yml` already in place from v0.5
+  dist-prep — used as-is for the v0.6.0a1 upload.
+- `docs/v0.7-plan.md` documenting the arc.
+
+### Verified
+
+- Dist artefacts rebuilt at `dist/structural_computing-0.6.0a1*`;
+  `twine check` PASSED.
+- Wheel METADATA correctly carries `Requires-Dist:
+  holant-tools>=0.6.1`.
+
+### Required ordering
+
+- `holant-tools 0.6.1` MUST land on PyPI before
+  `structural-computing 0.6.0a1`, since otherwise a clean
+  `pip install structural-computing` will fail to resolve the
+  holant-tools floor.
+- `structural-computing-bench 0.1.0a1` MUST land after
+  `structural-computing 0.6.0a1`, same reasoning.
+
+---
+
 ## [0.6.0a1] — 2026-05-31 (v0.6 alpha — architectural cleanup: D1 promotion)
 
 **v0.6 starts the cleanup-and-math-completeness arc.** Deliverable 1
