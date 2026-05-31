@@ -966,3 +966,56 @@ def test_v05_augmented_helper_directly_returns_zero_on_realisable():
     for i, val in enumerate(identities):
         assert abs(val) < tol, \
             f"identity {i}: value {val} exceeds tolerance {tol}"
+
+
+# ---------------------------------------------------------------------------
+# v0.6 Deliverable 3: |S| = 4 (m = 3) augmented Plücker enumeration at
+# even arity >= 8. Engine-side function in holant-tools v0.6.1 picks
+# up the additional 280 identities at arity 8 (alongside the 280 from
+# the m = 1 case); structural-computing's delegation wrapper consumes
+# them transparently.
+# ---------------------------------------------------------------------------
+
+
+def test_v06_d3_arity_8_realisable_signature_via_v0_6_1_engine():
+    """At arity 8 with the v0.6.1 engine, the augmented enumeration
+    returns 560 identities (m=1 + m=3). A signature built from a
+    random 9x9 skew matrix via the augmented Pfaffian framework
+    passes all of them."""
+    n = 8
+    values = _build_realisable_arity_n_odd_signature(n, seed=2028)
+    hbp = HolographicBasisPair(basis_matrix=np.eye(2))
+    r = hbp.transform_signature_general(values, arity=n)
+    assert r.is_realisable is True, \
+        f"realisable arity-8 signature should pass v0.6.1 engine check"
+    assert r.realisability_check == "plucker_arity_n_full"
+
+
+def test_v06_d3_arity_8_perturbed_signature_via_v0_6_1_engine():
+    """Perturbing a single weight-3 entry on the arity-8 realisable
+    signature breaks at least one of the now-560 augmented identities."""
+    n = 8
+    values = _build_realisable_arity_n_odd_signature(n, seed=2028)
+    # Perturb weight-3 entry. MSB-first convention: bitstring
+    # (0, 0, 0, 0, 0, 1, 1, 1) -> alpha = 7.
+    max_abs = max(abs(v) for v in values)
+    values_perturbed = list(values)
+    values_perturbed[7] += 0.3 * max_abs
+    hbp = HolographicBasisPair(basis_matrix=np.eye(2))
+    r = hbp.transform_signature_general(values_perturbed, arity=n)
+    assert r.is_realisable is False, \
+        "perturbed arity-8 signature should be rejected by 560 augmented identities"
+
+
+def test_v06_d3_delegation_count_grew_at_arity_8():
+    """Direct test: the delegation wrapper at arity 8 now returns 560
+    identities (up from 280 in v0.5 D1 / v0.6.0 which only had m=1)."""
+    n = 8
+    values = _build_realisable_arity_n_odd_signature(n, seed=2028)
+    hbp = HolographicBasisPair()
+    tau = {tuple((alpha >> (n - 1 - i)) & 1 for i in range(n)): values[alpha]
+           for alpha in range(1 << n)}
+    identities = hbp._augmented_plucker_identities_arity_n_odd(tau, n)
+    assert len(identities) == 560, \
+        f"arity 8 should give 560 identities (280 m=1 + 280 m=3) via " \
+        f"v0.6.1 engine; got {len(identities)}"

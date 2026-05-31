@@ -42,7 +42,7 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = [
-    "holant-tools>=0.6.0",
+    "holant-tools>=0.6.1",
     "numpy>=1.24",
     "sympy>=1.12",
 ]

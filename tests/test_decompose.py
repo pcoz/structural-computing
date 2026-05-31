@@ -526,3 +526,121 @@ def test_v05_tree_backup_disconnected_still_raises():
     g = {"vertices": [0, 1, 2, 3], "edges": [(0, 1), (2, 3)]}
     with pytest.raises(ValueError, match="disconnected"):
         _lipton_tarjan_separator(g)
+
+
+# ---------------------------------------------------------------------------
+# v0.6 Deliverable 2: level-based + articulation-augmentation backup.
+#
+# Catches "star-like" planar graphs where BOTH v0.4's simple BFS-layer
+# case AND v0.5's tree-edge augmentation backup fail. Canonical
+# adversarial examples: K_{1, n} (star) and K_{2, n} (complete
+# bipartite "book").
+# ---------------------------------------------------------------------------
+
+
+def _make_star(n):
+    """Star K_{1, n}: vertex 0 connected to vertices 1..n. n+1 total."""
+    return {"vertices": list(range(n + 1)),
+            "edges": [(0, i) for i in range(1, n + 1)]}
+
+
+def _make_K_2_n(n):
+    """K_{2, n}: two spine vertices 0, 1; n page vertices 2..n+1, each
+    connected to BOTH spine vertices. n+2 total. Planar."""
+    verts = [0, 1] + list(range(2, 2 + n))
+    edges = [(0, i) for i in range(1, 2 + n)] + [(1, i) for i in range(2, 2 + n)]
+    return {"vertices": verts, "edges": edges}
+
+
+def test_v06_d2_level_backup_catches_star():
+    """v0.4's simple case + v0.5's tree-edge backup BOTH fail on a
+    20-leaf star: every BFS level violates either size or partition
+    bounds; the BFS spanning tree has no balanced tree edge (every
+    leaf has subtree_size = 1). v0.6's level-based backup finds the
+    optimal separator S = {0} (the center)."""
+    import math
+    from structural_computing.decompose import _lipton_tarjan_separator
+    g = _make_star(20)
+    n = len(g["vertices"])
+    S, A, B = _lipton_tarjan_separator(g)
+    assert S == {0}, f"expected optimal separator {{0}}, got {S}"
+    assert len(S) <= 2.0 * math.sqrt(2.0 * n)
+    assert len(A) <= 2 * n / 3
+    assert len(B) <= 2 * n / 3
+    # Star edges all go from center to leaves; no leaf-leaf edges.
+    for (u, v) in g["edges"]:
+        assert not ((u in A and v in B) or (u in B and v in A))
+
+
+def test_v06_d2_level_backup_catches_K_2_n():
+    """K_{2, 20} defeats v0.4 + v0.5: both spine vertices live in the
+    fat BFS level. v0.6's level-based backup starts with S = {spine_0}
+    (the BFS root level), finds the residual has one mega-component
+    (spine_1 + all 20 pages, since spine_1 connects to all pages),
+    augments S with spine_1 (highest residual degree), bin-packs the
+    remaining 20 isolated pages 10/10."""
+    import math
+    from structural_computing.decompose import _lipton_tarjan_separator
+    g = _make_K_2_n(20)
+    n = len(g["vertices"])
+    S, A, B = _lipton_tarjan_separator(g)
+    assert S == {0, 1}, f"expected optimal separator {{0, 1}}, got {S}"
+    assert len(S) <= 2.0 * math.sqrt(2.0 * n)
+    assert len(A) <= 2 * n / 3
+    assert len(B) <= 2 * n / 3
+    for (u, v) in g["edges"]:
+        assert not ((u in A and v in B) or (u in B and v in A))
+
+
+def test_v06_d2_level_backup_handles_various_star_sizes():
+    """The level-based backup handles star K_{1, n} for a range of n,
+    always finding the optimal |S| = 1 separator."""
+    import math
+    from structural_computing.decompose import _lipton_tarjan_separator
+    for n_leaves in (10, 20, 30, 50):
+        g = _make_star(n_leaves)
+        n = len(g["vertices"])
+        S, A, B = _lipton_tarjan_separator(g)
+        assert S == {0}, f"star({n_leaves}): expected {{0}}, got {S}"
+        # Balanced partition of leaves (within rounding for odd n).
+        assert abs(len(A) - len(B)) <= 1, \
+            f"star({n_leaves}): expected balanced leaves, " \
+            f"got |A|={len(A)}, |B|={len(B)}"
+
+
+def test_v06_d2_level_backup_handles_various_K_2_n_sizes():
+    """The level-based backup handles K_{2, n} for a range of n,
+    always finding the optimal |S| = 2 separator."""
+    import math
+    from structural_computing.decompose import _lipton_tarjan_separator
+    for n_pages in (10, 20, 30, 50):
+        g = _make_K_2_n(n_pages)
+        n = len(g["vertices"])
+        S, A, B = _lipton_tarjan_separator(g)
+        assert S == {0, 1}, \
+            f"K_{{2,{n_pages}}}: expected {{0, 1}}, got {S}"
+        # Pages bin-packed balanced.
+        assert abs(len(A) - len(B)) <= 1
+
+
+def test_v06_d2_planar_separator_auto_works_on_star():
+    """End-to-end: PlanarSeparator(auto=True) on a star, using the
+    v0.6 D2 level-based backup, gives the same matching count as
+    brute force (= 0 for odd-cardinality star)."""
+    g = _make_star(20)
+    sep = PlanarSeparator(auto=True)
+    plan = sep.decompose(g)
+    auto_count = plan.evaluate(
+        lambda p: brute_force_count_matchings(p["vertices"], p["edges"])
+    )
+    brute_count = brute_force_count_matchings(g["vertices"], g["edges"])
+    assert int(auto_count) == brute_count
+
+
+def test_v06_d2_disconnected_still_raises():
+    """The v0.6 backup chain is invoked AFTER the connectivity check;
+    disconnected inputs still honest-stop before reaching D2."""
+    from structural_computing.decompose import _lipton_tarjan_separator
+    g = {"vertices": [0, 1, 2, 3], "edges": [(0, 1), (2, 3)]}
+    with pytest.raises(ValueError, match="disconnected"):
+        _lipton_tarjan_separator(g)

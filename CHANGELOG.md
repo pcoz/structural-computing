@@ -38,13 +38,146 @@ that math primitives live in the mathematical engine.
 - All 272 v0.5 tests still pass (delegation is semantically
   equivalent to the v0.5 prototype).
 
-### Still to ship for v0.6.0a1
+### Deliverable 2: level-based + articulation-augmentation backup (decompose.py)
 
-- Deliverable 2: full Lipton-Tarjan 1979 backup with the planar
-  dual (handles fat-middle-level adversarial planar graphs that
-  v0.5's tree-edge backup can't tighten).
-- Deliverable 3: `|S| ≥ 3` augmented Plücker configurations at
-  arity ≥ 8.
+**v0.6 D2 catches planar graphs that defeat BOTH v0.4 simple BFS-layer
+AND v0.5 tree-edge augmentation.** Canonical adversarial corpus:
+star graphs K_{1, n} (BFS spanning tree's children are all leaves; no
+balanced tree edge exists) and complete-bipartite K_{2, n} (the optimal
+separator is the 2-vertex spine; v0.5's tree-edge backup picks one
+spine vertex and tries to augment, but augmentation grows past the
+bound).
+
+New private functions in `decompose.py`:
+
+- `_lipton_tarjan_level_backup(vertices, adj, levels, n, bound_AB, bound_S)`
+  — invoked from `_lipton_tarjan_separator` when both the simple
+  case and the v0.5 tree-edge backup raise. Iterates BFS levels
+  smallest-first; for each, runs `_try_level_separator`.
+- `_try_level_separator(t, ...)` — starts with S = L_t; computes
+  connected components of the residual graph (V \ S); bin-packs
+  components into A (capacity 2n/3) and B (same), largest-first
+  greedy. If a component exceeds bound_AB, identifies its highest-
+  residual-degree vertex (heuristic for articulation) and adds to S,
+  then retries. Raises if |S| exceeds 2*sqrt(2n).
+- `_connected_components_in_residual(rest, adj, S)` — sub-graph
+  connected components on V \ S via iterative DFS.
+
+`_lipton_tarjan_separator` now has a three-step backup chain:
+simple BFS-layer → v0.5 tree-edge → v0.6 level-based. ValueError is
+raised only when ALL three approaches fail.
+
+### Tests
+- 6 new tests in `test_decompose.py`:
+  * `test_v06_d2_level_backup_catches_star`: K_{1, 20} (n=21) →
+    optimal |S|=1 separator {root} found.
+  * `test_v06_d2_level_backup_catches_K_2_n`: K_{2, 20} (n=22) →
+    optimal |S|=2 separator {spine_0, spine_1} found.
+  * `test_v06_d2_level_backup_handles_various_star_sizes`:
+    K_{1, n} for n ∈ {10, 20, 30, 50}.
+  * `test_v06_d2_level_backup_handles_various_K_2_n_sizes`:
+    K_{2, n} for n ∈ {10, 20, 30, 50}.
+  * `test_v06_d2_planar_separator_auto_works_on_star`: end-to-end
+    PlanarSeparator(auto=True) matching-count agrees with brute force.
+  * `test_v06_d2_disconnected_still_raises`: disconnected graphs
+    honest-stop before reaching D2.
+- 278 tests passing (272 baseline + 6 new D2; 272 + 6 = 278).
+
+### Honest scope (v0.6 D2)
+- This is a SIMPLIFIED form of LT 1979's "fat middle level" case
+  using BFS-level + articulation heuristic, not the original 1979
+  proof's planar-dual fundamental-cycle argument with rotation-
+  system-aware face counting.
+- The simplification works on the verified corpus (star and
+  K_{2,n} graphs at all tested sizes) plus practical "high-degree
+  connector" planar graphs. Cases where the residual has one giant
+  component AND no clear high-degree articulation vertex still
+  raise honest-stop with combined diagnostics.
+- The full Lipton-Tarjan 1979 algorithm with planar dual remains
+  a v0.7+ deliverable for adversarial cases.
+
+### Deliverable 3: |S| = 4 (m = 3) augmented Plücker at arity ≥ 8
+
+**v0.6 D3 closes the third v0.6 honest-scope gap** by extending the
+augmented-Pfaffian Plücker enumeration to the m = 3 configuration
+in `holant_tools v0.6.1`. The structural-computing delegation
+wrapper picks up the new identities transparently.
+
+### holant-tools v0.6.1 (sister-repo release)
+
+- `matchgate_identities_arity_n_odd_augmented` now enumerates BOTH
+  the m = 1 case (`S = {p, ω}`, v0.6.0) AND the m = 3 case
+  (`S = {p, q, r, ω}`, v0.6.1). Configuration analysis: the
+  parameter m := |S \ {ω}| must be ODD and satisfy `m + 5 ≤ n` for
+  the Plücker identity to give pure-τ relations via the augmented
+  convention. Viable m ∈ {1, 3, 5, ...} at arity n ≥ 6, 8, 10, ...
+  respectively.
+- New count at arity 8: 560 identities (280 m=1 + 280 m=3).
+  At arity 10: 5460 identities (1260 + 4200).
+- Verified symbolically on a generic 9x9 skew matrix; numerically
+  on signatures from random 9x9 skew matrices (all 560 identities
+  vanish to machine precision).
+- 5 new tests in holant-tools' `tests/test_holant_tools.py`
+  (`test_v061_*`); total 348 passing (343 v0.6.0 baseline +5).
+- Released as `pcoz/holant-tools v0.6.1` (commit `16d48f6`).
+
+### structural-computing side (this repo)
+
+- `pyproject.toml`: holant-tools dep floor bumped from `>=0.6.0`
+  to `>=0.6.1` so the v0.6.1 m=3 identities are guaranteed.
+- The delegation wrapper at
+  `HolographicBasisPair._augmented_plucker_identities_arity_n_odd`
+  consumes the extended engine function transparently — no
+  structural-computing code changes needed beyond the floor bump.
+- 3 new tests in `test_compose.py`:
+  * `test_v06_d3_arity_8_realisable_signature_via_v0_6_1_engine`:
+    a random arity-8 odd-parity signature from a 9x9 skew matrix
+    passes the now-560 augmented identities.
+  * `test_v06_d3_arity_8_perturbed_signature_via_v0_6_1_engine`:
+    perturbing a weight-3 entry is detected.
+  * `test_v06_d3_delegation_count_grew_at_arity_8`: direct test
+    that the delegation wrapper returns 560 identities at arity 8.
+- 281 tests passing (278 D2 baseline + 3 new D3).
+
+### Honest scope (v0.6 D3)
+
+- Ships m ∈ {1, 3}. Higher-m configurations (m = 5 at arity ≥ 10,
+  m = 7 at arity ≥ 12, ...) remain a follow-on per the same
+  configuration analysis.
+- Per Cai-Lu 2011 §4, the full augmented Plücker enumeration
+  across all m + the standard Plücker enumeration together
+  characterises the d-admissibility variety completely. v0.6 D3
+  closes a substantial fraction of that program at the arities
+  practical implementations care about.
+
+### Cumulative state at v0.6.0a1 release
+
+- 281 tests passing in structural-computing.
+- 348 tests passing in holant-tools.
+- Three v0.6 deliverables complete:
+  - D1: augmented Plücker helper promoted from
+    structural-computing v0.5 prototype to
+    `holant-tools.non_symmetric` v0.6.0.
+  - D2: Lipton-Tarjan level-based + articulation-augmentation
+    backup catching star + K_{2,n} adversarial graphs that v0.5's
+    tree-edge backup couldn't.
+  - D3: augmented Plücker enumeration extended with m = 3
+    configuration, doubling identity count at arity 8 (280 → 560)
+    and adding 4200 new identities at arity 10.
+
+### Deferred to v0.7+
+
+- Higher-m augmented Plücker configurations (m = 5 at arity ≥ 10,
+  m = 7 at arity ≥ 12, ...).
+- Full Lipton-Tarjan 1979 backup with planar-dual fundamental-cycle
+  counting (for adversarial cases the v0.6 simplification can't
+  bound).
+- Tropical optimisation (per NEXT.md §δ).
+- Diagnostic layer for CP-SAT / Gurobi / SLURM (per §ε).
+- Wrapper consolidation: `StructuralComputer` →
+  `Orchestrator` delegation.
+- PyPI publication.
+
 
 ## [0.5.0a1] — 2026-05-31 (v0.5 alpha — math completeness)
 

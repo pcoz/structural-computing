@@ -546,7 +546,7 @@ Recursively split into sub-problems, base case in-family:
 |---|---|
 | `ShannonExpansion` | branch on one binary variable; combine via sum |
 | `TreewidthBoundedDP` | Bodlaender-style multi-bag DP on a user-supplied tree decomp |
-| `PlanarSeparator` | divide-and-conquer along a vertex separator (user-supplied OR auto-discovered via Lipton-Tarjan 1979 — BFS-layer simple case in v0.4, plus a tree-edge balanced-cut backup for fat-middle-level graphs in v0.5) |
+| `PlanarSeparator` | divide-and-conquer along a vertex separator (user-supplied OR auto-discovered via Lipton-Tarjan 1979 — BFS-layer simple case in v0.4, tree-edge balanced-cut backup in v0.5, level-based + articulation-augmentation backup in v0.6 catching star + K_{2,n} adversarial corpus) |
 | `RecursiveCircuitCut` | enumerate `2^\|cut\|` forced-in/forced-out edge assignments |
 
 `DecompositionPlan` is the tree node. Each node is either a leaf (with

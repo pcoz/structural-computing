@@ -649,29 +649,38 @@ def _lipton_tarjan_separator(problem: Any
         # Simple case doesn't apply -- the graph has a "fat middle
         # level" where every BFS level violates either the size bound
         # or one of the partition bounds. Fall through to the v0.5
-        # spanning-tree fundamental-cycle backup (a simpler form of
-        # the Lipton-Tarjan 1979 backup argument).
+        # spanning-tree backup; if THAT also fails, the v0.6 D2 level-
+        # based + articulation-augmentation backup is invoked.
         try:
             return _lipton_tarjan_tree_backup(
                 vertices, adj, levels, n, bound_AB, bound_S,
             )
-        except ValueError as backup_err:
-            # Backup also failed. Raise with combined diagnostics.
-            max_level_size = max(len(L) for L in levels)
-            raise ValueError(
-                f"_lipton_tarjan_separator: BOTH the simple BFS-layer "
-                f"case AND the v0.5 tree-edge backup failed "
-                f"(n={n}, max_level_size={max_level_size}, "
-                f"2*sqrt(2n) bound={bound_S:.2f}). The simple case "
-                f"failed because every level violates either the size "
-                f"or partition bounds. The backup said: "
-                f"{backup_err!s}. This can happen on adversarial "
-                f"planar graphs where neither approach reaches a "
-                f"valid separator, or on non-planar graphs (where the "
-                f"bound doesn't apply). Provide a user-supplied "
-                f"separator via PlanarSeparator(separator=..., "
-                f"side_a=..., side_b=...) instead."
-            )
+        except ValueError as v05_err:
+            # v0.5 backup failed too. Try the v0.6 D2 level-based
+            # backup. This handles star-like and K_{2,n}-like graphs
+            # where the optimal separator is a small "connector" vertex
+            # set in a fat BFS level.
+            try:
+                return _lipton_tarjan_level_backup(
+                    vertices, adj, levels, n, bound_AB, bound_S,
+                )
+            except ValueError as v06_err:
+                # All three approaches failed.
+                max_level_size = max(len(L) for L in levels)
+                raise ValueError(
+                    f"_lipton_tarjan_separator: simple BFS-layer "
+                    f"case + v0.5 tree-edge backup + v0.6 level-based "
+                    f"backup ALL failed (n={n}, "
+                    f"max_level_size={max_level_size}, "
+                    f"2*sqrt(2n) bound={bound_S:.2f}). v0.5 said: "
+                    f"{v05_err!s}. v0.6 said: {v06_err!s}. This can "
+                    f"happen on adversarial planar graphs where none "
+                    f"of the BFS-based approaches reach a valid "
+                    f"separator, or on non-planar graphs (where the "
+                    f"bound doesn't apply). Provide a user-supplied "
+                    f"separator via PlanarSeparator(separator=..., "
+                    f"side_a=..., side_b=...) instead."
+                )
 
     # Build the three sets.
     S = set(levels[candidate])
@@ -925,6 +934,264 @@ def _lipton_tarjan_tree_backup(vertices: List[Any],
         )
 
     return S, A_candidate, B_candidate
+
+
+# ---------------------------------------------------------------------------
+# v0.6 Deliverable 2: level-based + articulation augmentation backup
+# (the simpler form of Lipton-Tarjan 1979's "fat middle level" case)
+# ---------------------------------------------------------------------------
+#
+# Catches planar graphs where BOTH the v0.4 simple BFS-layer case AND
+# the v0.5 tree-edge augmentation backup fail. Canonical adversarial
+# examples (verified to defeat v0.5):
+#
+#   - star(n) = K_{1, n}: BFS gives L_0 = {root}, L_1 = {n leaves}.
+#     Optimal separator is {root}, size 1. v0.5's tree-edge backup
+#     can't see this because the BFS spanning tree's children of
+#     root are all leaves (subtree_size = 1), so no "balanced tree
+#     edge" exists.
+#
+#   - K_{2, n} (complete bipartite): two spine vertices + n pages.
+#     BFS from spine_0 gives L_0 = {spine_0}, L_1 = {spine_1, all
+#     pages}. Optimal separator is {spine_0, spine_1}, size 2.
+#
+# Algorithm sketch
+# ----------------
+# For each BFS level L_t (smallest first):
+#   1. Initial S = L_t. Skip if |L_t| > bound_S.
+#   2. Compute connected components of the residual graph (V \ S).
+#   3. Bin-pack components into A and B with capacity 2n/3 each,
+#      largest-first greedy. If feasible: return (S, A, B).
+#   4. If one component is too big to fit either bin (>2n/3),
+#      identify its "articulation" vertex -- the vertex whose
+#      removal best splits it. Heuristic: the highest-degree
+#      vertex in the component (in the residual sub-graph).
+#      Add it to S; recurse step 2.
+#   5. If S grows past bound_S: this level is infeasible; try
+#      the next level.
+#
+# Why this works on the corpus
+# ----------------------------
+#   star(n):     L_0 = {root}, S = {root}. Residual has n isolated
+#                vertices (each a separate component). Bin-pack
+#                trivially. |S| = 1.
+#   K_{2, n}:    L_0 = {spine_0}, S = {spine_0}. Residual is one
+#                big component (spine_1 connects to all pages).
+#                Augment with spine_1 (highest residual degree).
+#                S = {0, 1}, residual = n isolated pages. |S| = 2.
+#
+# Honest scope (v0.6 D2)
+# ----------------------
+# This is a SIMPLIFIED form of LT 1979's fat-middle-level argument.
+# The full algorithm uses the planar embedding + fundamental-cycle
+# inside/outside counting via the planar dual, which gives tighter
+# theoretical bounds on adversarial cases. The simplification works
+# on star + K_{2,n} corpus + many practical "high-degree connector"
+# planar graphs; cases where the residual has only one giant
+# component AND no clear articulation vertex still raise honest-stop.
+# Full LT 1979 with planar dual is a v0.7+ deliverable.
+# ---------------------------------------------------------------------------
+
+
+def _lipton_tarjan_level_backup(vertices: List[Any],
+                                  adj: Dict[Any, List[Any]],
+                                  levels: List[List[Any]],
+                                  n: int,
+                                  bound_AB: float,
+                                  bound_S: float,
+                                  ) -> Tuple[Set[Any], Set[Any], Set[Any]]:
+    r"""Level-based separator with articulation-augmentation backup.
+
+    See the section comment above for the algorithm sketch. Invoked
+    from :func:`_lipton_tarjan_separator` when BOTH the simple
+    BFS-layer case AND the v0.5 tree-edge augmentation backup have
+    failed.
+
+    Parameters
+    ----------
+    vertices : list
+        The graph's vertex set.
+    adj : dict
+        Adjacency lists (built by the caller).
+    levels : list of lists
+        BFS levels from a single root.
+    n : int
+        Total vertex count.
+    bound_AB : float
+        ``2 * n / 3`` (Lipton-Tarjan balanced-partition bound).
+    bound_S : float
+        ``2 * sqrt(2 * n)`` (Lipton-Tarjan separator-size bound).
+
+    Returns
+    -------
+    (S, A, B) : tuple of three sets
+        A valid Lipton-Tarjan-style partition.
+
+    Raises
+    ------
+    ValueError
+        If no level admits a balanced partition within the LT bounds
+        even after articulation augmentation.
+    """
+    # Try each level as a candidate separator, smallest first --
+    # smaller levels give a smaller initial S that has more room to
+    # grow via augmentation before hitting bound_S.
+    levels_by_size = sorted(range(len(levels)), key=lambda t: len(levels[t]))
+    last_err: Optional[str] = None
+    for t in levels_by_size:
+        if len(levels[t]) > bound_S:
+            # Even before any augmentation, this level is already
+            # too fat -- skip.
+            continue
+        try:
+            return _try_level_separator(
+                t, vertices, adj, levels, n, bound_AB, bound_S,
+            )
+        except ValueError as e:
+            last_err = str(e)
+            continue
+
+    raise ValueError(
+        f"level-based backup found no valid level separator "
+        f"(tried {len(levels_by_size)} levels); last error: {last_err}"
+    )
+
+
+def _try_level_separator(t: int,
+                          vertices: List[Any],
+                          adj: Dict[Any, List[Any]],
+                          levels: List[List[Any]],
+                          n: int,
+                          bound_AB: float,
+                          bound_S: float,
+                          ) -> Tuple[Set[Any], Set[Any], Set[Any]]:
+    r"""Try level t as the separator nucleus, augmenting with
+    articulation vertices if needed.
+
+    Algorithm
+    ---------
+    1. S = level t initially.
+    2. Compute connected components of the residual graph V \ S.
+    3. Bin-pack components into A (capacity 2n/3) and B (capacity
+       2n/3). Largest component first.
+    4. If a component is too big for either bin, identify its
+       highest-degree vertex (in the residual sub-graph), add to S,
+       and retry step 2.
+    5. Terminate with success if bin-packing succeeds; with
+       ValueError if S exceeds bound_S or no articulation vertex
+       can reduce the biggest component.
+
+    Raises
+    ------
+    ValueError
+        On infeasibility (too-big component without splittable
+        articulation, or |S| > bound_S).
+    """
+    S: Set[Any] = set(levels[t])
+    # Track the "non-S" vertices to bin-pack.
+    rest: Set[Any] = set(vertices) - S
+
+    # Augmentation loop. Bounded by len(rest) iterations (each
+    # iteration adds at least one vertex to S).
+    for _ in range(len(rest) + 1):
+        # 2. Compute connected components of rest in the residual
+        # graph (where S vertices are excluded from adjacency).
+        components = _connected_components_in_residual(rest, adj, S)
+
+        # 3. Largest-first bin-pack into A (cap bound_AB) + B (same).
+        components_sorted = sorted(components, key=len, reverse=True)
+        A: Set[Any] = set()
+        B: Set[Any] = set()
+        too_big_component: Optional[Set[Any]] = None
+        for comp in components_sorted:
+            sz = len(comp)
+            # Check if this single component already exceeds bound_AB.
+            if sz > bound_AB:
+                too_big_component = comp
+                break
+            # Otherwise place in the bin with more room.
+            if len(A) + sz <= bound_AB and (
+                len(B) + sz > bound_AB or len(A) <= len(B)
+            ):
+                A.update(comp)
+            elif len(B) + sz <= bound_AB:
+                B.update(comp)
+            else:
+                # Neither bin has room for this component (despite
+                # individual size <= bound_AB). Both bins are full.
+                # This means total non-S vertices > 2 * bound_AB,
+                # so the level itself is too dense -- give up on this
+                # level.
+                raise ValueError(
+                    f"level t={t}: total rest-vertices "
+                    f"({len(rest)}) > 2 * bound_AB ({2 * bound_AB:.1f})"
+                )
+
+        if too_big_component is None:
+            # Bin-packing succeeded. Final size check.
+            if len(S) > bound_S:
+                raise ValueError(
+                    f"level t={t}: bin-pack succeeded but final |S|="
+                    f"{len(S)} > 2*sqrt(2n) = {bound_S:.2f}"
+                )
+            return S, A, B
+
+        # 4. Augment: find the highest-residual-degree vertex in the
+        # too-big component, add it to S, retry. This is a heuristic
+        # for "articulation vertex": vertices that touch many others
+        # are good candidates for separator membership.
+        def residual_degree(v):
+            return sum(1 for u in adj[v] if u in too_big_component and u != v)
+
+        articulator = max(too_big_component, key=residual_degree)
+        S.add(articulator)
+        rest.discard(articulator)
+
+        # Bail early if |S| exceeds bound.
+        if len(S) > bound_S:
+            raise ValueError(
+                f"level t={t}: |S| grew past 2*sqrt(2n) = {bound_S:.2f} "
+                f"after augmentation (|S|={len(S)})"
+            )
+
+    # Shouldn't reach here -- the loop has a guard. But if we do,
+    # something is structurally wrong.
+    raise ValueError(
+        f"level t={t}: augmentation loop did not converge within "
+        f"{len(rest) + 1} rounds"
+    )
+
+
+def _connected_components_in_residual(rest: Set[Any],
+                                        adj: Dict[Any, List[Any]],
+                                        S: Set[Any],
+                                        ) -> List[Set[Any]]:
+    r"""Connected components of the sub-graph induced on ``rest``
+    (i.e., ``V \ S``) in the residual graph.
+
+    Edges from a vertex u in rest to S are IGNORED (we're computing
+    components in the residual graph after removing S). Two vertices
+    u, v in rest are in the same component iff there's a path in
+    rest connecting them (using only intra-rest edges).
+    """
+    seen: Set[Any] = set()
+    components: List[Set[Any]] = []
+    for start in rest:
+        if start in seen:
+            continue
+        comp: Set[Any] = set()
+        stack = [start]
+        while stack:
+            v = stack.pop()
+            if v in seen:
+                continue
+            seen.add(v)
+            comp.add(v)
+            for u in adj[v]:
+                if u in rest and u not in seen and u not in S:
+                    stack.append(u)
+        components.append(comp)
+    return components
 
 
 class PlanarSeparator:
