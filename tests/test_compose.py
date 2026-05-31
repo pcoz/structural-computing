@@ -599,21 +599,86 @@ def test_srp_rank2_correctly_returns_none_when_no_basis_exists():
         assert h._matchgate_standard_distance(result.values) < 1e-6
 
 
-def test_srp_closed_form_skipped_for_complex_roots():
-    """When the recurrence has complex roots (discriminant < 0), the
-    closed-form correctly skips and falls through to the existing
-    canonical-bases + grid search.
-
-    NAE-3 [0, 1, 1, 0] has recurrence kernel ~ (1, -1, 1) with
-    characteristic polynomial x^2 - x + 1 = 0, discriminant = 1-4
-    = -3 < 0 (complex roots e^{±i*pi/3}). The closed-form's
-    `_basis_from_recurrence_kernel` returns None on this kernel, and
-    the existing search's Hadamard candidate succeeds."""
+def test_srp_complex_roots_via_v05_closed_form():
+    """v0.5: complex-roots recurrence kernels are now handled by the
+    closed-form directly. NAE-3 [0, 1, 1, 0] has recurrence kernel ~
+    (1, -1, 1) with characteristic polynomial x^2 - x + 1 = 0, roots
+    e^{±i*pi/3}. v0.4 fell through to the canonical-bases sweep (where
+    Hadamard succeeded); v0.5 derives T = [[1, -alpha], [0, beta]]
+    directly with alpha = 1/2, beta = sqrt(3)/2."""
+    import numpy as np
     h = HolographicBasisPair()
     discovery = h.discover_basis([0, 1, 1, 0])
     assert discovery is not None
     T, result = discovery
+    # The v0.5 closed-form should produce exactly T = [[1, -1/2],
+    # [0, sqrt(3)/2]] (not the canonical Hadamard fallback).
+    np.testing.assert_allclose(T, [[1.0, -0.5], [0.0, 3**0.5 / 2]],
+                                atol=1e-9)
+    # And it should land in matchgate-standard form.
     assert h._matchgate_standard_distance(result.values) < 1e-6
+
+
+def test_srp_complex_roots_corpus():
+    """v0.5: a corpus of complex-roots signatures derived from various
+    (alpha, beta) pairs, all caught by the closed-form path."""
+    import numpy as np
+    h = HolographicBasisPair()
+    # Each test case is built from a recurrence with characteristic
+    # polynomial (x - r_1)(x - r_2) = x^2 - 2*alpha*x + (alpha^2 + beta^2)
+    # where r_1, r_2 = alpha +/- i*beta. The signature is z_k = real
+    # part of a complex-conjugate-pair decomposition. For simplicity,
+    # we use z_k = 2*A*r^k cos(k*theta) where r = sqrt(alpha^2 + beta^2)
+    # and theta = arctan(beta/alpha) -- the standard "real form" of the
+    # complex-conjugate recurrence solution.
+    test_cases = []
+    for alpha, beta in [(0.5, 0.866),     # NAE-3 angle
+                         (0.0, 1.0),       # purely imaginary roots
+                         (1.0, 1.0),       # 45-degree angle
+                         (0.3, 2.0),       # small alpha, larger beta
+                         (-0.7, 1.5),      # negative real part
+                         (2.0, 0.5)]:
+        n = 4
+        # Build z_k from the explicit cos/sin form.
+        r = (alpha * alpha + beta * beta) ** 0.5
+        theta = np.arctan2(beta, alpha)
+        # A = 1: z_k = 2 * r^k * cos(k * theta).
+        z = [2.0 * (r ** k) * np.cos(k * theta) for k in range(n + 1)]
+        test_cases.append((f"alpha={alpha}, beta={beta}, arity={n}", z))
+    for name, z in test_cases:
+        discovery = h.discover_basis(z)
+        assert discovery is not None, \
+            f"{name}: closed-form should find a basis"
+        T, result = discovery
+        d = h._matchgate_standard_distance(result.values)
+        assert d < 1e-6, \
+            f"{name}: distance {d} exceeds tolerance"
+
+
+def test_srp_complex_roots_random_stress():
+    """v0.5 stress test: 50 random (alpha, beta) pairs in
+    [-10, +10] x (0.1, 10] all yield matchgate-standard form via the
+    closed-form."""
+    import numpy as np
+    h = HolographicBasisPair()
+    rng = np.random.default_rng(2027)
+    for _trial in range(50):
+        alpha = float(rng.uniform(-10, 10))
+        # beta strictly positive to ensure non-degenerate complex roots.
+        beta = float(rng.uniform(0.1, 10))
+        n = int(rng.choice([3, 4, 5]))
+        r = (alpha * alpha + beta * beta) ** 0.5
+        theta = np.arctan2(beta, alpha)
+        z = [2.0 * (r ** k) * np.cos(k * theta) for k in range(n + 1)]
+        discovery = h.discover_basis(z)
+        assert discovery is not None, \
+            f"trial alpha={alpha:.4f}, beta={beta:.4f}, n={n}: " \
+            f"closed-form should find a basis"
+        T, result = discovery
+        d = h._matchgate_standard_distance(result.values)
+        assert d < 1e-6, \
+            f"trial alpha={alpha:.4f}, beta={beta:.4f}, n={n}: " \
+            f"distance {d} exceeds tolerance"
 
 
 def test_basis_from_recurrence_kernel_degenerate_cases():
@@ -645,8 +710,18 @@ def test_basis_from_recurrence_kernel_degenerate_cases():
     assert h._basis_from_recurrence_kernel(1.0, 0.0, 0.0) is None
 
     # Complex roots (discriminant < 0). c*x^2 + b*x + a = x^2 - x + 1
-    # has discriminant 1 - 4 = -3 < 0.
-    assert h._basis_from_recurrence_kernel(1.0, -1.0, 1.0) is None
+    # has discriminant 1 - 4 = -3 < 0. As of v0.5, this case returns
+    # a real T = [[1, -alpha], [0, beta]] derived from alpha, beta
+    # (the real and imaginary parts of the conjugate-root pair). v0.4
+    # used to return None here; the v0.5 closed-form upgrade catches it.
+    T_complex = h._basis_from_recurrence_kernel(1.0, -1.0, 1.0)
+    assert T_complex is not None, \
+        "v0.5: complex roots should now yield a real closed-form T"
+    assert T_complex.shape == (2, 2)
+    # alpha = -b/(2c) = 0.5; beta = sqrt(3)/2 ~ 0.866.
+    import numpy as np
+    np.testing.assert_allclose(T_complex, [[1.0, -0.5], [0.0, 3**0.5 / 2]],
+                                 atol=1e-9)
 
     # Double root (discriminant = 0, r_1 = r_2). c*x^2 + b*x + a =
     # (x - 3)^2 = x^2 - 6x + 9 -> (a, b, c) = (9, -6, 1).
@@ -759,3 +834,135 @@ def test_branch_sum_sub_problems_and_combine_match_protocol():
     ])
     assert bs.sub_problems == ["X", "Y"]
     assert bs.combine([10, 20]) == 1 * 10 + 2 * 20
+
+
+# ---------------------------------------------------------------------------
+# v0.5 Deliverable 1: full augmented-Pfaffian Plücker enumeration at
+# EVEN arity >= 6 odd-parity.
+#
+# These tests cover the new identities derived from |S|=2
+# configurations on the (n+1)-vertex augmented Kasteleyn matrix.
+# Acceptance:
+#   - Identities vanish on signatures built from a real (n+1)x(n+1)
+#     skew matrix via the augmented Pfaffian framework
+#     (matchgate-realisable construction).
+#   - Identities catch perturbations of those signatures.
+#   - The realisability_check field reports "plucker_arity_n_full"
+#     at arity 6 odd-parity (closing the v0.4 "tight necessary"
+#     caveat).
+# ---------------------------------------------------------------------------
+
+
+def _build_realisable_arity_n_odd_signature(n, seed=2027):
+    """Construct an arity-n odd-parity signature from a random
+    (n+1)x(n+1) skew matrix M_omega using the augmented Pfaffian
+    convention: tau(b) = Pf(complement(b) in {0..n-1} ∪ {omega}).
+    The resulting signature is matchgate-realisable by construction.
+    """
+    rng = np.random.default_rng(seed)
+    M_raw = rng.normal(size=(n + 1, n + 1))
+    M_mat = (M_raw - M_raw.T) / 2     # skew-symmetric
+
+    def pfaffian(indices):
+        indices = sorted(indices)
+        k = len(indices)
+        if k == 0: return 1.0
+        if k % 2 != 0: return 0.0
+        if k == 2: return M_mat[indices[0], indices[1]]
+        total = 0.0
+        i0 = indices[0]
+        for j in range(1, k):
+            sign = (-1) ** (j + 1)
+            ij = indices[j]
+            rest = [indices[p] for p in range(1, k) if p != j]
+            total += sign * M_mat[i0, ij] * pfaffian(rest)
+        return total
+
+    omega = n
+    values = [0.0] * (1 << n)
+    for mask in range(1 << n):
+        b = tuple((mask >> (n - 1 - i)) & 1 for i in range(n))
+        if sum(b) % 2 == 1:
+            complement = [i for i in range(n) if b[i] == 0]
+            values[mask] = pfaffian(sorted(complement + [omega]))
+    return values
+
+
+def test_v05_augmented_identities_vanish_on_realisable_arity_6():
+    """The v0.5 augmented Plücker identities all vanish on a signature
+    built from the augmented Pfaffian framework -- this is the basic
+    mathematical correctness test."""
+    values = _build_realisable_arity_n_odd_signature(6)
+    hbp = HolographicBasisPair(basis_matrix=np.eye(2))
+    r = hbp.transform_signature_general(values, arity=6)
+    assert r.is_realisable is True, \
+        f"realisable signature should pass v0.5 check, got " \
+        f"is_realisable={r.is_realisable}, check={r.realisability_check}"
+    assert r.realisability_check == "plucker_arity_n_full", \
+        f"v0.5 should report 'plucker_arity_n_full' at arity 6 odd-parity"
+
+
+def test_v05_augmented_identities_reject_perturbed_arity_6():
+    """Perturbing a tau entry breaks the augmented identities. The
+    perturbed signature is rejected (likely already by v0.4's standard
+    Plücker enumeration, but v0.5's augmented check is a tighter
+    safety net)."""
+    values = _build_realisable_arity_n_odd_signature(6)
+    # Perturb one weight-3 entry by 30% of the max-abs value.
+    n = 6
+    max_abs = max(abs(v) for v in values)
+    # Find a weight-3 entry to perturb. Bitstring (0,0,0,1,1,1) ->
+    # MSB-first alpha = 0+0+0+4+2+1 = 7.
+    weight3_alpha = 7
+    values_perturbed = list(values)
+    values_perturbed[weight3_alpha] += 0.3 * max_abs
+
+    hbp = HolographicBasisPair(basis_matrix=np.eye(2))
+    r = hbp.transform_signature_general(values_perturbed, arity=6)
+    assert r.is_realisable is False, \
+        "perturbed signature should be rejected"
+
+
+def test_v05_realisability_check_at_arity_5_does_not_promote():
+    """At arity 5, v0.5's augmented identities don't apply (the
+    construction requires EVEN arity: weight-(odd) complemented in
+    {0..n-1} gives weight-(n-odd), and n-odd is odd iff n is even,
+    so the augmented framework yields all-zero Pfaffians at odd
+    arity). The realisability_check field must NOT advance to
+    'plucker_arity_n_full' at arity 5 -- v0.5 explicitly skips the
+    helper at odd arity.
+
+    Use a single-point arity-5 odd-parity signature (only one
+    weight-1 entry non-zero) -- realisable on the standard basis
+    via a single-point matchgate."""
+    n = 5
+    values = [0.0] * (1 << n)
+    # Bitstring (1, 0, 0, 0, 0) MSB-first -> alpha = 16.
+    values[16] = 1.0
+    hbp = HolographicBasisPair(basis_matrix=np.eye(2))
+    r = hbp.transform_signature_general(values, arity=n)
+    # The realisability VERDICT depends on the standard Plücker
+    # enumeration; what matters here is the CHECK NAME never becomes
+    # v0.5's "_full" form at arity 5.
+    assert r.realisability_check != "plucker_arity_n_full", \
+        f"arity 5 must not use v0.5's _full check, got " \
+        f"'{r.realisability_check}'"
+
+
+def test_v05_augmented_helper_directly_returns_zero_on_realisable():
+    """Direct test of _augmented_plucker_identities_arity_n_odd:
+    on a matchgate-realisable arity-6 odd-parity signature, all 30
+    identity values should be (essentially) zero."""
+    values = _build_realisable_arity_n_odd_signature(6)
+    n = 6
+    tau = {tuple((alpha >> (n - 1 - i)) & 1 for i in range(n)): values[alpha]
+           for alpha in range(1 << n)}
+    hbp = HolographicBasisPair()
+    identities = hbp._augmented_plucker_identities_arity_n_odd(tau, n)
+    assert len(identities) == 30, \
+        f"arity 6 should give 30 augmented identities, got {len(identities)}"
+    max_abs_tau = max(abs(v) for v in values)
+    tol = 1e-9 * max(max_abs_tau ** 2, 1.0)
+    for i, val in enumerate(identities):
+        assert abs(val) < tol, \
+            f"identity {i}: value {val} exceeds tolerance {tol}"

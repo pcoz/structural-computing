@@ -424,3 +424,105 @@ def test_planar_separator_auto_mode_constructor_validation():
     sep = PlanarSeparator(auto=True)
     assert sep.auto is True
     assert sep.separator is None  # populated by decompose()
+
+
+# ---------------------------------------------------------------------------
+# v0.5 Deliverable 2: spanning-tree fundamental-cycle backup
+#
+# The backup catches planar graphs where the v0.4 BFS-layer simple case
+# fails because every BFS level violates either the size bound or one
+# of the partition bounds. Canonical adversarial example: the
+# "double-star" (two centers connected, each with many leaves). The
+# obvious separator is the two centers, but BFS-layer search can't
+# see it because the level containing both leaves AND the other
+# center is too fat.
+# ---------------------------------------------------------------------------
+
+
+def _make_double_star(k, m):
+    """Double-star graph: vertices 0, 1 are centers connected to each
+    other; vertices 2..k+1 are leaves of 0; vertices k+2..k+m+1 are
+    leaves of 1. n = k + m + 2."""
+    verts = [0, 1] + list(range(2, 2 + k + m))
+    edges = [(0, 1)]
+    for i in range(k):
+        edges.append((0, 2 + i))
+    for j in range(m):
+        edges.append((1, 2 + k + j))
+    return {"vertices": verts, "edges": edges}
+
+
+def test_v05_tree_backup_catches_double_star():
+    """The v0.4 simple case fails on a sufficiently large symmetric
+    double-star (n=42 with k=m=20: every level fails either the
+    2*sqrt(2n) size bound or the 2n/3 partition bounds). v0.5's
+    tree-edge backup catches it, finding the optimal |S|=2 separator
+    {center_0, center_1}."""
+    import math
+    from structural_computing.decompose import _lipton_tarjan_separator
+    g = _make_double_star(20, 20)
+    n = len(g["vertices"])
+    bound_S = 2.0 * math.sqrt(2.0 * n)
+    S, A, B = _lipton_tarjan_separator(g)
+    assert S == {0, 1}, \
+        f"expected optimal separator {{0, 1}} on double-star, got {S}"
+    assert len(S) <= bound_S
+    assert len(A) <= 2 * n / 3
+    assert len(B) <= 2 * n / 3
+    # No A-B direct edge.
+    for (u, v) in g["edges"]:
+        assert not ((u in A and v in B) or (u in B and v in A))
+
+
+def test_v05_tree_backup_handles_various_double_stars():
+    """The backup handles a range of double-star sizes correctly,
+    always finding a valid partition within the LT bounds."""
+    import math
+    from structural_computing.decompose import _lipton_tarjan_separator
+    for (k, m) in [(15, 15), (20, 20), (25, 25), (30, 30), (50, 50)]:
+        g = _make_double_star(k, m)
+        n = len(g["vertices"])
+        bound_S = 2.0 * math.sqrt(2.0 * n)
+        S, A, B = _lipton_tarjan_separator(g)
+        # Partition validity.
+        assert S | A | B == set(g["vertices"])
+        assert not (S & A) and not (S & B) and not (A & B)
+        # No A-B direct edge.
+        for (u, v) in g["edges"]:
+            assert not ((u in A and v in B) or (u in B and v in A)), \
+                f"ds({k},{m}): edge {(u,v)} crosses A-B"
+        # Size + balance bounds.
+        assert len(S) <= bound_S, \
+            f"ds({k},{m}): |S|={len(S)} > 2*sqrt(2n)={bound_S:.2f}"
+        assert len(A) <= 2 * n / 3
+        assert len(B) <= 2 * n / 3
+
+
+def test_v05_planar_separator_auto_works_on_double_star():
+    """End-to-end: PlanarSeparator(auto=True) with the v0.5 backup
+    succeeds on a double-star, and the matching-count via the
+    decomposition equals brute force."""
+    g = _make_double_star(20, 20)
+    sep = PlanarSeparator(auto=True)
+    plan = sep.decompose(g)
+    auto_count = plan.evaluate(
+        lambda p: brute_force_count_matchings(p["vertices"], p["edges"])
+    )
+    brute_count = brute_force_count_matchings(g["vertices"], g["edges"])
+    # Double-star with k=m has perfect matchings only if k+m+2 is even
+    # AND the structure permits it. For k=m=20: n=42 (even). Each
+    # center must match with one of its leaves; the connecting edge
+    # (0,1) takes both centers; etc. Just verify auto == brute.
+    assert int(auto_count) == brute_count, \
+        f"auto={auto_count}, brute={brute_count}"
+
+
+def test_v05_tree_backup_disconnected_still_raises():
+    """The backup does NOT change the disconnected-graph behaviour:
+    the connectivity check happens before backup invocation in the
+    simple case, so disconnected still raises immediately."""
+    import pytest
+    from structural_computing.decompose import _lipton_tarjan_separator
+    g = {"vertices": [0, 1, 2, 3], "edges": [(0, 1), (2, 3)]}
+    with pytest.raises(ValueError, match="disconnected"):
+        _lipton_tarjan_separator(g)

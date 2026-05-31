@@ -5,7 +5,7 @@ mental model of how the package fits together. Reading this end-to-end
 takes ~20 minutes and should cover everything you'd otherwise have to
 piece together from the source.
 
-**Version covered:** v0.3.0a1 (current `main`).
+**Version covered:** v0.5.0a1 (current `main`).
 
 ---
 
@@ -161,7 +161,7 @@ structural-computing/
 │   ├── transform.py           ← reductions (one-shot transformations)
 │   ├── compose.py             ← compositions (combine multiple in-family evals)
 │   └── decompose.py           ← decompositions (recursive splitting)
-├── tests/                     ← pytest suite (229 tests across 14 modules)
+├── tests/                     ← pytest suite (272 tests across 15 modules)
 │   ├── test_smoke.py          ← public-API contract + wrapper smoke
 │   ├── test_orchestrator.py   ← 26 orchestrator scenarios
 │   ├── test_{module}.py       ← per-module coverage
@@ -174,9 +174,9 @@ structural-computing/
 └── LICENSE                    ← MIT-with-attribution
 ```
 
-The 6732 source lines split roughly: **orchestrator** 17%, **transform**
-17%, **compose** 13%, **decompose** 12%, **easy** 11%, **classify**
-5%, **route** 5%, everything else < 5% each.
+The 8164 source lines split roughly: **compose** 22%, **decompose** 16%,
+**orchestrator** 15%, **transform** 14%, **easy** 9%, **route** 4%,
+**classify** 4%, everything else < 4% each.
 
 ---
 
@@ -487,14 +487,17 @@ in the package. Its public methods:
   four-step search in increasing-cost order:
   1. order-2 recurrence gate (Cai-Lu Thm 2.5 — no basis can rescue a
      signature that fails this);
-  2. **v0.4 closed-form shortcut**: derive T = [[1, -r_2], [1, -r_1]]
-     directly from the recurrence kernel's roots (or a rank-1 form
-     T = [[1, 0], [1, -r]] when the kernel is degenerate). Catches
-     signatures whose roots lie OUTSIDE the [-2, +2] grid in O(1)
-     without searching;
+  2. **v0.4–v0.5 closed-form shortcut**: derive T directly from the
+     recurrence kernel's roots in O(1):
+     - real distinct roots → `T = [[1, -r_2], [1, -r_1]]` (v0.4);
+     - degenerate (c=0 or a=0, rank-1) → `T = [[1, 0], [1, -r]]` (v0.4);
+     - complex conjugate roots `α ± iβ` → `T = [[1, -α], [0, β]]` (v0.5).
+     Together these catch signatures whose roots lie anywhere on the
+     real line OR on a generic complex conjugate pair, without any
+     search;
   3. canonical-bases sweep (identity, Hadamard, swap, shears,
-     rotation_4) for cases the closed-form doesn't reach (complex
-     roots, double roots);
+     rotation_4) for cases the closed-form doesn't reach (double
+     roots, exotic complex conditions);
   4. parameterised grid + coordinate-descent polish as the final
      fallback for exotic cases.
 - `discover_common_basis(signatures)` — multi-signature SRP (Cai-Lu
@@ -515,9 +518,15 @@ the result names which check was applied:
   odd-parity identity. Sufficient check.
 - `"plucker_arity_n"` — general arity ≥ 5 via the standard Plücker
   enumeration plus, for even arities, the augmented weight-1 identity.
-  Complete for arity-5; a tight necessary check at arity ≥ 6
-  odd-parity (research-grade weight-3-×-weight-3 augmented Plücker
-  relations not yet implemented).
+  Complete for arity-5; reported at odd arities ≥ 7 where v0.5's
+  even-arity augmented helper doesn't apply.
+- `"plucker_arity_n_full"` (v0.5) — even arity ≥ 6 odd-parity with
+  the full augmented Plücker enumeration on the (n+1)-vertex
+  augmented Kasteleyn matrix. `n × C(n-1, 4)` identities derived
+  from the ``S = {p, omega}`` configuration (30 at arity 6, 280 at
+  arity 8, 1260 at arity 10). Proven-sufficient check, closing
+  v0.4's "tight necessary" caveat. The |S|≥3 augmented configurations
+  at arity ≥ 8 remain deferred to v0.6.
 - `"deferred"` — the genuinely-zero-signature shortcut (trivially
   realisable; the check was skipped because the regular check would
   do meaningless arithmetic on near-zero numbers).
@@ -537,7 +546,7 @@ Recursively split into sub-problems, base case in-family:
 |---|---|
 | `ShannonExpansion` | branch on one binary variable; combine via sum |
 | `TreewidthBoundedDP` | Bodlaender-style multi-bag DP on a user-supplied tree decomp |
-| `PlanarSeparator` | divide-and-conquer along a vertex separator (user-supplied OR auto-discovered via Lipton-Tarjan 1979, v0.4) |
+| `PlanarSeparator` | divide-and-conquer along a vertex separator (user-supplied OR auto-discovered via Lipton-Tarjan 1979 — BFS-layer simple case in v0.4, plus a tree-edge balanced-cut backup for fat-middle-level graphs in v0.5) |
 | `RecursiveCircuitCut` | enumerate `2^\|cut\|` forced-in/forced-out edge assignments |
 
 `DecompositionPlan` is the tree node. Each node is either a leaf (with
@@ -1691,7 +1700,7 @@ Guarded by `tests/originality/`:
 
 ## 12. Testing strategy
 
-- **229 tests** across ~14 modules. Run with `pytest tests/`.
+- **272 tests** across ~15 modules. Run with `pytest tests/`.
 - Per-module test files cover each primitive in isolation.
 - `tests/test_smoke.py` is the public-API contract: every name in
   `structural_computing.__all__` must round-trip through this test;

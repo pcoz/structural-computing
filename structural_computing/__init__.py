@@ -15,7 +15,7 @@ See the docs at https://github.com/pcoz/free-fermion-quantum-simulation/blob/mai
 for the 10-minute tutorial.
 """
 
-__version__ = "0.4.0a1"
+__version__ = "0.5.0a1"
 
 from .easy import (
     StructuralComputer,

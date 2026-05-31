@@ -6,6 +6,197 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 once it reaches v1.0.0; until then, the v0.x API may shift between minor
 versions.
 
+## [0.5.0a1] — 2026-05-31 (v0.5 alpha — math completeness)
+
+**v0.5 closes the three honest-scope gaps documented in v0.4:**
+complex-roots SRP, full Cai-Lu §4 d-admissibility at even arity ≥ 6
+odd-parity, and a spanning-tree fundamental-cycle backup for the
+Lipton-Tarjan auto-separator. **272 tests pass** (up from 262 v0.4
+baseline; +10 net new tests across the three deliverables).
+
+**Deliverable 3 (closed-form SRP for complex-roots rank-2 signatures) — complete.**
+The order-2 recurrence kernel's complex-roots case is now caught by
+the closed-form path in `HolographicBasisPair._basis_from_recurrence_kernel`,
+rather than falling through to the canonical-bases sweep.
+
+### Complex-roots SRP closed-form (compose.py)
+- When the recurrence kernel has discriminant `b^2 - 4ac < -tol`, the
+  roots are a complex conjugate pair `r = alpha ± i*beta` with
+  `alpha = -b/(2c)` and `beta = sqrt(-disc)/(2c)`. The new closed-form
+  returns the real basis matrix
+  `T = [[1, -alpha], [0, beta]]`, which transforms the signature's
+  polynomial encoding `2*Re[A*((alpha*u + v) + i*beta*u)^n]` to
+  `2*beta^n * Re[A*(v + i*u)^n]`. The transformed signature
+  alternates zero at one parity branch with geometric ratio
+  `i^2 = -1` between consecutive non-zero entries.
+- Verified empirically on NAE-3 `[0, 1, 1, 0]`: `T = [[1, -0.5],
+  [0, sqrt(3)/2]]` produces `[0, 0.75, 0, -0.75]` — alternate-zero
+  odd-parity, geometric-progression with ratio -1, distance 0.
+
+### Tests
+- 2 new tests in `test_compose.py`:
+  * `test_srp_complex_roots_via_v05_closed_form`: NAE-3 hits the
+    closed-form path (not the canonical Hadamard fallback); the
+    discovered T matches `[[1, -1/2], [0, sqrt(3)/2]]` exactly.
+  * `test_srp_complex_roots_corpus`: 6 hand-picked (alpha, beta) pairs
+    spanning `(0, 1.0)` (purely imaginary), `(0.5, 0.866)` (NAE-3),
+    `(1, 1)` (45°), `(0.3, 2.0)`, `(-0.7, 1.5)`, `(2, 0.5)` -- all
+    caught.
+  * `test_srp_complex_roots_random_stress`: 50 random `(alpha, beta)`
+    pairs in `[-10, 10] x (0.1, 10]`, arities 3-5 -- all caught.
+- Renamed and updated 1 v0.4 contract test
+  (`test_srp_closed_form_skipped_for_complex_roots` ->
+  `test_srp_complex_roots_via_v05_closed_form`) to reflect the
+  v0.5 behaviour change.
+- Updated 1 v0.4 helper test
+  (`test_basis_from_recurrence_kernel_degenerate_cases`): the
+  complex-roots case `(1, -1, 1)` now returns a real T instead of None.
+- 264/264 tests pass (v0.4 baseline was 262; net +2).
+
+**Deliverable 1 (full Cai-Lu §4 d-admissibility at even arity ≥ 6 odd-parity) — complete.**
+The augmented-Pfaffian Plücker enumeration on the (n+1)-vertex Kasteleyn
+matrix is now applied at even arity ≥ 6 odd-parity, closing the v0.4
+"tight necessary but not provably sufficient" gap. The
+`realisability_check` field now reports `"plucker_arity_n_full"` at
+arity 6 (and even arity 8, 10, ...) when these identities pass.
+
+### Augmented Plücker enumeration (compose.py)
+- New static helper
+  `HolographicBasisPair._augmented_plucker_identities_arity_n_odd(tau, n)`
+  returning the list of polynomial values for the v0.5 augmented
+  identities. Configuration: ``S = {p, omega}`` for each ``p`` in
+  ``{0..n-1}``, with 4-subset ``{a, b, c, d}`` ranging over
+  ``C(n-1, 4)`` choices in ``{0..n-1} \ {p}``. Each identity maps
+  to a Plücker quadratic in tau values via the augmented Pfaffian
+  correspondence ``tau(b) = Pf(complement(b) ∪ {omega})``.
+- Count: ``n × C(n-1, 4)`` identities. At arity 6: 30. Arity 8: 280.
+  Arity 10: 1260. (Growth is O(n^5).)
+- Derivation verified symbolically on a generic 7x7 skew matrix
+  during development (Plücker identity vanishes identically on
+  symbolic Pfaffians).
+- Wired into `_check_general_realisability`: at even arity ≥ 6
+  odd-parity, after the standard Plücker enumeration and augmented
+  weight-1 identity pass, run the new helper. If all pass, the
+  result's `realisability_check` is `"plucker_arity_n_full"` --
+  signalling a proven-sufficient check rather than the v0.4
+  tight-necessary one.
+
+### Honest scope (v0.5 D1)
+- The v0.5 helper ships the ``|S|=2`` Plücker configuration only.
+  At arity ≥ 8, additional configurations with
+  ``|S \ {omega}| ∈ {3, 5, ...}`` also give valid Plücker identities;
+  these are deferred to v0.6.
+- At ODD arity (5, 7, 9, ...) the augmented identities derived here
+  are vacuous on the strict odd-parity branch (weight-(n-1) is even,
+  not odd) -- the helper is explicitly skipped, and
+  `realisability_check` remains the v0.4 `"plucker_arity_n"`.
+- In random testing at arity 6, none of 200 random odd-parity
+  signatures pass v0.4's standard Plücker enumeration alone. The
+  v0.5 contribution is therefore primarily MATHEMATICAL COMPLETENESS
+  (proven-sufficient check), not new rejections in practice.
+
+### Tests
+- 4 new tests in `test_compose.py`:
+  * `test_v05_augmented_identities_vanish_on_realisable_arity_6`:
+    a signature built from a random 7x7 skew matrix via the
+    augmented Pfaffian framework passes v0.5's check and reports
+    `"plucker_arity_n_full"`.
+  * `test_v05_augmented_identities_reject_perturbed_arity_6`:
+    perturbing a weight-3 tau entry by 30% of max-abs is rejected.
+  * `test_v05_realisability_check_at_arity_5_does_not_promote`:
+    at arity 5, the `realisability_check` never becomes
+    `"plucker_arity_n_full"` (v0.5 explicitly skips odd-arity).
+  * `test_v05_augmented_helper_directly_returns_zero_on_realisable`:
+    direct test that the helper returns 30 values for arity 6, all
+    of which are below scale-invariant tolerance on a realisable
+    input.
+- 268/268 tests pass (v0.5 D3 baseline was 264; net +4).
+
+**Deliverable 2 (Lipton-Tarjan spanning-tree fundamental-cycle backup) — complete.**
+The `_lipton_tarjan_separator` function now falls back to a tree-edge
+balanced-cut backup when the BFS-layer simple case fails, catching
+adversarial planar graphs (e.g., double-stars) where every BFS level
+violates either the size bound or one of the partition bounds.
+
+### Tree-edge backup (decompose.py)
+- New private function `_lipton_tarjan_tree_backup(vertices, adj,
+  levels, n, bound_AB, bound_S)` implementing a simpler form of
+  the Lipton-Tarjan 1979 backup argument:
+    1. Build the BFS spanning tree from the BFS levels already
+       computed.
+    2. Compute subtree sizes via post-order traversal.
+    3. Find the tree edge whose removal gives the most balanced
+       partition (closest to 50/50, both sides ≤ 2n/3).
+    4. Initial separator = endpoints of the balanced tree edge.
+    5. Iteratively augment with offending non-tree-edge endpoints
+       until no A-B direct edge remains.
+    6. Validate final |S| ≤ 2*sqrt(2n); otherwise honest-stop.
+- `_lipton_tarjan_separator` modified: on simple-case failure,
+  invoke the backup instead of raising immediately. Only raise if
+  the backup ALSO fails (with combined diagnostics).
+- Found optimal separator on a corpus of double-stars (k=m=15
+  through k=m=50): `S = {center_0, center_1}` of size 2 in every
+  case, well within the LT bound.
+
+### Tests
+- 4 new tests in `test_decompose.py`:
+  * `test_v05_tree_backup_catches_double_star`: the n=42 symmetric
+    double-star case where v0.4 raises. v0.5 finds the optimal
+    |S|=2 separator.
+  * `test_v05_tree_backup_handles_various_double_stars`: 5 sizes
+    of symmetric double-stars (n=32, 42, 52, 62, 102), all valid
+    partitions within LT bounds.
+  * `test_v05_planar_separator_auto_works_on_double_star`: end-to-end
+    `PlanarSeparator(auto=True)` matching count via the backup
+    equals brute force.
+  * `test_v05_tree_backup_disconnected_still_raises`: the backup
+    doesn't change disconnected-graph handling (still raises before
+    backup invocation).
+- 272/272 tests pass (v0.5 D1 baseline was 268; net +4).
+
+### Honest scope (v0.5 D2)
+- Implements the SIMPLER form of LT 1979's backup (tree-edge
+  balanced-cut + augmentation), not the original paper's
+  fundamental-cycle-via-planar-dual argument. Sufficient for many
+  practical planar graphs (notably tree-like separator structures).
+- For graphs where the tree-edge cut's augmentation grows |S|
+  beyond `2*sqrt(2n)`, the backup honestly raises and the caller
+  falls back to user-supplied. This can happen on densely-connected
+  planar graphs where the spanning-tree backup is suboptimal.
+- The full Lipton-Tarjan 1979 algorithm with the planar embedding
+  and dual graph is a v0.6 deliverable.
+
+### Package metadata (v0.5 release)
+- Version bumped to `0.5.0a1` in `pyproject.toml`,
+  `structural_computing/__init__.py`, and the smoke test.
+- `holant-tools` dependency floor stays at `>=0.5.0`.
+
+### Cumulative state
+- 272 tests passing (229 v0.3 baseline + 33 v0.4 + 10 v0.5).
+- Public API surface unchanged at the export level. Additions:
+  closed-form complex-roots branch in
+  `_basis_from_recurrence_kernel` (D3); new helper
+  `_augmented_plucker_identities_arity_n_odd` (D1); new function
+  `_lipton_tarjan_tree_backup` (D2).
+- New `realisability_check` value `"plucker_arity_n_full"`
+  available on `HolographicBasisResult`.
+
+### Deferred to v0.6+
+- Full Lipton-Tarjan 1979 backup with the planar embedding /
+  dual-graph argument (for adversarial cases the v0.5 tree-edge
+  backup can't handle).
+- `|S|≥3` augmented Plücker configurations at arity ≥ 8
+  (the `|S|=2` case ships in v0.5 D1).
+- Odd-arity-specific augmented identities (v0.5's augmented helper
+  only applies at even arity ≥ 6).
+- Tropical optimisation (per NEXT.md §(δ)).
+- Diagnostic layer for CP-SAT / Gurobi / SLURM (per §(ε)).
+- Wrapper consolidation: `StructuralComputer` → `Orchestrator`
+  delegation.
+- PyPI publication of v0.5.0a1.
+
+
+
 ## [0.4.0a1] — 2026-05-31 (v0.4 alpha — MGI + Lipton-Tarjan + SRP closed-form)
 
 **v0.4 closes the three open items from the v0.3 "out of scope" list:

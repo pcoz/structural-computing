@@ -646,24 +646,32 @@ def _lipton_tarjan_separator(problem: Any
             break
 
     if candidate is None:
-        # Simple case doesn't apply. Either the graph has a fat middle
-        # level (legitimate planar case requiring the spanning-tree
-        # backup) or it's not planar (in which case Lipton-Tarjan's
-        # size bound doesn't even apply). Either way, the caller
-        # should fall back to user-supplied.
-        max_level_size = max(len(L) for L in levels)
-        raise ValueError(
-            f"_lipton_tarjan_separator: simple-case Lipton-Tarjan did "
-            f"not find a valid level separator (n={n}, "
-            f"max_level_size={max_level_size}, "
-            f"2*sqrt(2n) bound={bound_S:.2f}). This can happen on "
-            f"adversarial planar graphs (where the full spanning-tree "
-            f"backup case is needed -- a v0.5 deliverable) or on "
-            f"non-planar graphs (where the bound doesn't apply). "
-            f"Provide a user-supplied separator via "
-            f"PlanarSeparator(separator=..., side_a=..., side_b=...) "
-            f"instead."
-        )
+        # Simple case doesn't apply -- the graph has a "fat middle
+        # level" where every BFS level violates either the size bound
+        # or one of the partition bounds. Fall through to the v0.5
+        # spanning-tree fundamental-cycle backup (a simpler form of
+        # the Lipton-Tarjan 1979 backup argument).
+        try:
+            return _lipton_tarjan_tree_backup(
+                vertices, adj, levels, n, bound_AB, bound_S,
+            )
+        except ValueError as backup_err:
+            # Backup also failed. Raise with combined diagnostics.
+            max_level_size = max(len(L) for L in levels)
+            raise ValueError(
+                f"_lipton_tarjan_separator: BOTH the simple BFS-layer "
+                f"case AND the v0.5 tree-edge backup failed "
+                f"(n={n}, max_level_size={max_level_size}, "
+                f"2*sqrt(2n) bound={bound_S:.2f}). The simple case "
+                f"failed because every level violates either the size "
+                f"or partition bounds. The backup said: "
+                f"{backup_err!s}. This can happen on adversarial "
+                f"planar graphs where neither approach reaches a "
+                f"valid separator, or on non-planar graphs (where the "
+                f"bound doesn't apply). Provide a user-supplied "
+                f"separator via PlanarSeparator(separator=..., "
+                f"side_a=..., side_b=...) instead."
+            )
 
     # Build the three sets.
     S = set(levels[candidate])
@@ -675,6 +683,248 @@ def _lipton_tarjan_separator(problem: Any
         elif i > candidate:
             B.update(L)
     return S, A, B
+
+
+# ---------------------------------------------------------------------------
+# v0.5 Deliverable 2: spanning-tree fundamental-cycle backup
+# ---------------------------------------------------------------------------
+#
+# The backup catches planar graphs where the BFS-layer simple case
+# fails because every level violates either the size bound or one of
+# the partition bounds. Canonical example: a "double-star" graph
+# (two centers connected by an edge, each with many leaves) -- the
+# obvious separator is the two centers, but the BFS-layer search
+# can't find it because L_1 (containing both leaves of the first
+# center and the second center) is too fat.
+#
+# The algorithm (a simpler form of Lipton-Tarjan 1979):
+#
+#   1. Build the BFS spanning tree T_BFS rooted at the BFS root.
+#   2. For each tree edge e = (parent, child), compute the size of
+#      the subtree rooted at `child`. The edge SPLITS the tree into
+#      two parts: the subtree (size s) and the rest (size n - s).
+#   3. Find a tree edge whose split is "balanced": both s and n - s
+#      are at most 2n/3.
+#   4. The initial separator is {parent, child} of that edge.
+#      Partition: A = subtree-vertices \ {child}, B = rest \ {parent}.
+#   5. Validate: walk through all NON-TREE edges. Any edge (u, v)
+#      with u in A and v in B (or vice versa) is "offending" -- a
+#      direct A-B crossing not through S. Add ALL non-tree-edge
+#      endpoints crossing A and B to S, re-partition A and B
+#      (removing the new S vertices), and re-validate. Iterate to
+#      fixpoint.
+#   6. Check the resulting |S| size: if |S| <= 2*sqrt(2n) (the LT
+#      theorem bound), return (S, A, B). Otherwise, the backup
+#      gives up.
+#
+# This is a SIMPLER version of LT than the original 1979 paper's
+# fundamental-cycle-via-planar-dual argument. It works for many
+# practical planar graphs (notably the double-star and other graphs
+# with tree-like separator structure) but may not always find the
+# tightest separator. The full Lipton-Tarjan 1979 algorithm using
+# the planar embedding is a v0.6 deliverable.
+# ---------------------------------------------------------------------------
+
+
+def _lipton_tarjan_tree_backup(vertices: List[Any],
+                                 adj: Dict[Any, List[Any]],
+                                 levels: List[List[Any]],
+                                 n: int,
+                                 bound_AB: float,
+                                 bound_S: float,
+                                 ) -> Tuple[Set[Any], Set[Any], Set[Any]]:
+    r"""Tree-edge balanced-cut backup for the Lipton-Tarjan separator
+    when the BFS-layer simple case fails.
+
+    See the section comment above for the algorithm sketch. This
+    function is invoked from :func:`_lipton_tarjan_separator` when its
+    simple case finds no valid level partition.
+
+    Parameters
+    ----------
+    vertices : list
+        The graph's vertex set.
+    adj : dict
+        Adjacency lists: ``adj[v]`` is the list of neighbours of v.
+    levels : list of lists
+        BFS levels from a single root, already computed by the caller.
+    n : int
+        Total vertex count.
+    bound_AB : float
+        ``2 * n / 3`` (Lipton-Tarjan balanced-partition bound).
+    bound_S : float
+        ``2 * sqrt(2 * n)`` (Lipton-Tarjan separator-size bound).
+
+    Returns
+    -------
+    (S, A, B) : tuple of three sets
+        A valid Lipton-Tarjan-style partition.
+
+    Raises
+    ------
+    ValueError
+        If no balanced tree edge exists, or if the augmentation step
+        produces a separator larger than ``bound_S``. The caller
+        treats this as an honest-stop signal.
+    """
+    # Step 1: build the BFS spanning tree from the already-computed
+    # levels. The parent of each vertex (at level k > 0) is any vertex
+    # in level k-1 that's adjacent to it -- BFS guarantees at least one
+    # such adjacency exists. We pick the first one found, giving a
+    # deterministic spanning tree.
+    parent: Dict[Any, Optional[Any]] = {}
+    root = levels[0][0]
+    parent[root] = None
+    vertex_level: Dict[Any, int] = {v: 0 for v in levels[0]}
+    for lvl_idx, L in enumerate(levels[1:], start=1):
+        for v in L:
+            vertex_level[v] = lvl_idx
+            # Find the parent: any neighbour of v in the previous level.
+            for u in adj[v]:
+                if vertex_level.get(u, -1) == lvl_idx - 1:
+                    parent[v] = u
+                    break
+
+    # Children-map for the spanning tree.
+    children: Dict[Any, List[Any]] = {v: [] for v in vertices}
+    for v, p in parent.items():
+        if p is not None:
+            children[p].append(v)
+
+    # Step 2: compute subtree sizes via post-order traversal.
+    # ``subtree_size[v]`` = number of vertices in the sub-tree rooted
+    # at v, INCLUDING v itself.
+    subtree_size: Dict[Any, int] = {}
+    # Post-order: iteratively process leaves first.
+    order: List[Any] = []
+    stack = [(root, False)]
+    seen_post = set()
+    while stack:
+        node, processed = stack.pop()
+        if processed:
+            order.append(node)
+        else:
+            if node in seen_post:
+                continue
+            seen_post.add(node)
+            stack.append((node, True))
+            for c in children[node]:
+                stack.append((c, False))
+    for v in order:
+        subtree_size[v] = 1 + sum(subtree_size[c] for c in children[v])
+
+    # Step 3: find a tree edge whose split is balanced. We prefer the
+    # MOST balanced cut (minimises max(s, n-s)) since that gives the
+    # best chance of satisfying the 2n/3 bound on both sides.
+    best_edge: Optional[Tuple[Any, Any]] = None
+    best_max_side = n + 1                    # initialised to infeasible
+    for v in vertices:
+        if v == root:
+            continue                          # root has no parent edge
+        s = subtree_size[v]
+        rest = n - s
+        if max(s, rest) > bound_AB:
+            continue                          # this cut violates 2n/3
+        if max(s, rest) < best_max_side:
+            best_max_side = max(s, rest)
+            best_edge = (parent[v], v)
+
+    if best_edge is None:
+        raise ValueError(
+            f"tree-edge backup: no balanced tree edge found "
+            f"(every tree edge gives a side > 2n/3 = {bound_AB:.1f})"
+        )
+
+    edge_parent, edge_child = best_edge
+
+    # Step 4: collect the subtree rooted at edge_child as candidate-A,
+    # everything else as candidate-B. The separator starts as
+    # {edge_parent, edge_child}.
+    A_candidate: Set[Any] = set()
+    # Walk subtree of edge_child iteratively.
+    sub_stack = [edge_child]
+    sub_seen = {edge_child}
+    while sub_stack:
+        v = sub_stack.pop()
+        A_candidate.add(v)
+        for c in children[v]:
+            if c not in sub_seen:
+                sub_seen.add(c)
+                sub_stack.append(c)
+    B_candidate = set(vertices) - A_candidate
+    S: Set[Any] = {edge_parent, edge_child}
+    A_candidate.discard(edge_child)
+    B_candidate.discard(edge_parent)
+
+    # Step 5: validate by walking all edges. A non-S edge connecting
+    # A_candidate to B_candidate is a "crossing edge"; we augment S
+    # with one of its endpoints (the deeper one in the tree, since
+    # adding a deeper vertex tends to grow S less). Iterate until no
+    # crossings remain.
+    #
+    # Build the edge list once. We iterate it each round; the loop is
+    # O(rounds * |E|) where rounds is at most |S| (each augment-step
+    # adds at least one vertex to S). For planar graphs this is
+    # bounded.
+    edge_list: List[Tuple[Any, Any]] = []
+    seen_edges: Set[Tuple[Any, Any]] = set()
+    for u in vertices:
+        for v in adj[u]:
+            key = (u, v) if (str(u), str(v)) <= (str(v), str(u)) else (v, u)
+            if key not in seen_edges:
+                seen_edges.add(key)
+                edge_list.append(key)
+
+    max_rounds = n                            # generous upper bound
+    for _ in range(max_rounds):
+        crossing: Optional[Tuple[Any, Any]] = None
+        for (u, v) in edge_list:
+            if u in S or v in S:
+                continue                      # already a S-incident edge
+            if (u in A_candidate) and (v in B_candidate):
+                crossing = (u, v)
+                break
+            if (u in B_candidate) and (v in A_candidate):
+                crossing = (v, u)
+                break
+        if crossing is None:
+            break                              # valid partition reached
+        # Augment S with the offending edge's endpoints, prioritising
+        # the deeper one (which leaves the larger side intact).
+        u_cross, v_cross = crossing
+        depth_u = vertex_level.get(u_cross, 0)
+        depth_v = vertex_level.get(v_cross, 0)
+        if depth_u >= depth_v:
+            S.add(u_cross)
+            A_candidate.discard(u_cross)
+            B_candidate.discard(u_cross)
+        else:
+            S.add(v_cross)
+            A_candidate.discard(v_cross)
+            B_candidate.discard(v_cross)
+        # Safety: if S grows beyond the LT bound, fail early.
+        if len(S) > bound_S:
+            raise ValueError(
+                f"tree-edge backup: separator grew to |S|={len(S)} > "
+                f"2*sqrt(2n)={bound_S:.2f} during augmentation; "
+                f"backup gives up"
+            )
+    else:
+        # max_rounds exhausted without converging.
+        raise ValueError(
+            f"tree-edge backup: augmentation loop exceeded "
+            f"max_rounds={max_rounds} without converging"
+        )
+
+    # Step 6: final size check.
+    if len(S) > bound_S:
+        raise ValueError(
+            f"tree-edge backup: final |S|={len(S)} > 2*sqrt(2n)="
+            f"{bound_S:.2f}; backup found a valid partition but the "
+            f"Lipton-Tarjan size bound is violated"
+        )
+
+    return S, A_candidate, B_candidate
 
 
 class PlanarSeparator:

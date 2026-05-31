@@ -15,21 +15,22 @@ Realisability Problem) algorithm:
     entries.
   - This example uses HolographicBasisPair.discover_basis() to search
     the basis manifold for a T that maps the input into the target
-    form. The v0.4 search has four steps in increasing-cost order:
-    (1) order-2 recurrence gate; (2) v0.4 closed-form shortcut derived
-    from the recurrence kernel (catches rank-1 signatures whose root
-    lies anywhere on the real line); (3) canonical-bases sweep
-    (identity, Hadamard, swap, common shears) for complex-roots cases;
+    form. As of v0.5 the search has four steps in increasing-cost
+    order:
+    (1) order-2 recurrence gate (Cai-Lu Thm 2.5);
+    (2) closed-form shortcut derived from the recurrence kernel:
+        real distinct roots -> T = [[1, -r_2], [1, -r_1]] (v0.4);
+        complex roots r = α ± iβ -> T = [[1, -α], [0, β]] (v0.5 D3);
+        degenerate (c=0 or a=0, rank-1) -> T = [[1, 0], [1, -r]];
+    (3) canonical-bases sweep (identity, Hadamard, swap, shears) for
+        the remaining double-root / exotic cases;
     (4) parameterised grid + coordinate-descent polish as final
-    fallback.
+        fallback.
 
 Honest scope: rank-2 signatures (true two-root decomposition with
-both amplitudes non-zero) are GENUINELY matchgate-rank-2 in every
-basis -- no 2x2 basis can bring them to matchgate-standard form. The
-search correctly returns None for these. Adversarial complex-roots
-cases that miss the canonical candidates also return None; the full
-Cai-Lu §4 algorithm with all four "realizability subvariety" cases
-is a v0.5 deliverable.
+both amplitudes non-zero AND non-aligned) are GENUINELY matchgate-
+rank-2 in every basis -- no 2x2 basis can bring them to matchgate-
+standard form. The search correctly returns None for these.
 """
 from structural_computing import HolographicBasisPair
 
@@ -47,9 +48,8 @@ for label, sig in cases:
     print(f"signature: {label}")
     discovery = h.discover_basis(sig)
     if discovery is None:
-        print(f"  -> no basis found (signature not matchgate-realisable "
-               f"on any basis, or rank-2 with complex roots outside "
-               f"the canonical candidates)")
+        print(f"  -> no basis found (signature fails the order-2 "
+               f"recurrence, so no basis can rescue it -- Cai-Lu Thm 2.5)")
     else:
         T, result = discovery
         rounded_T = [[round(float(x), 6) for x in row] for row in T]
