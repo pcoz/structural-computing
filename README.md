@@ -20,10 +20,9 @@ external tool. No silent approximation.
 > simulators, MIP timeouts, hand-rolled scheduling heuristics)
 > collapse to a few lines of declarative query, in the same way
 > SQL collapsed 1970s data-iteration code. It's written for
-> regular humans — not mathematicians — with concrete characters
-> (Sara at a reliability-software company, Maya at a logistics
-> company, a hospital scheduling surgeries), three runnable
-> worked examples ([reliability](book/examples/09_network_reliability/),
+> regular humans — not mathematicians — with concrete characters,
+> three runnable worked examples
+> ([reliability](book/examples/09_network_reliability/),
 > [scheduling](book/examples/10_schedule_optimisation/),
 > [CP-SAT pre-flight](book/examples/11_cpsat_preflight/)), and
 > a [one-page business case](book/01a-the-business-case-in-one-page.md)
