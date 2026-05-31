@@ -5,7 +5,7 @@ mental model of how the package fits together. Reading this end-to-end
 takes ~20 minutes and should cover everything you'd otherwise have to
 piece together from the source.
 
-**Version covered:** v0.5.0a1 (current `main`).
+**Version covered:** v0.6.0a1 (current `main`).
 
 ---
 
@@ -161,7 +161,7 @@ structural-computing/
 │   ├── transform.py           ← reductions (one-shot transformations)
 │   ├── compose.py             ← compositions (combine multiple in-family evals)
 │   └── decompose.py           ← decompositions (recursive splitting)
-├── tests/                     ← pytest suite (272 tests across 15 modules)
+├── tests/                     ← pytest suite (281 tests across 15 modules)
 │   ├── test_smoke.py          ← public-API contract + wrapper smoke
 │   ├── test_orchestrator.py   ← 26 orchestrator scenarios
 │   ├── test_{module}.py       ← per-module coverage
@@ -520,13 +520,19 @@ the result names which check was applied:
   enumeration plus, for even arities, the augmented weight-1 identity.
   Complete for arity-5; reported at odd arities ≥ 7 where v0.5's
   even-arity augmented helper doesn't apply.
-- `"plucker_arity_n_full"` (v0.5) — even arity ≥ 6 odd-parity with
-  the full augmented Plücker enumeration on the (n+1)-vertex
-  augmented Kasteleyn matrix. `n × C(n-1, 4)` identities derived
-  from the ``S = {p, omega}`` configuration (30 at arity 6, 280 at
-  arity 8, 1260 at arity 10). Proven-sufficient check, closing
-  v0.4's "tight necessary" caveat. The |S|≥3 augmented configurations
-  at arity ≥ 8 remain deferred to v0.6.
+- `"plucker_arity_n_full"` — even arity ≥ 6 odd-parity with the
+  full augmented Plücker enumeration on the (n+1)-vertex augmented
+  Kasteleyn matrix. v0.5 D1 shipped the `|S|=2` configuration
+  (`n × C(n-1, 4)` identities — 30 at arity 6, 280 at arity 8,
+  1260 at arity 10); **v0.6 D3 added the `|S|=4` configuration**
+  (`C(n, 3) × C(n-3, 4)` identities — 0 at arity 6, 280 at arity 8,
+  4200 at arity 10). Combined count at arity 8: 560. At arity 10:
+  5460. Proven-sufficient check, closing v0.4's "tight necessary"
+  caveat. Higher-m configurations (m ∈ {5, 7, …}) remain a v0.7+
+  follow-on. The identities live in `holant_tools.non_symmetric`
+  (function `matchgate_identities_arity_n_odd_augmented`,
+  promoted from a structural-computing prototype to the engine in
+  the v0.6 D1 cleanup pass).
 - `"deferred"` — the genuinely-zero-signature shortcut (trivially
   realisable; the check was skipped because the regular check would
   do meaningless arithmetic on near-zero numbers).
@@ -1700,7 +1706,7 @@ Guarded by `tests/originality/`:
 
 ## 12. Testing strategy
 
-- **272 tests** across ~15 modules. Run with `pytest tests/`.
+- **281 tests** across ~15 modules. Run with `pytest tests/`.
 - Per-module test files cover each primitive in isolation.
 - `tests/test_smoke.py` is the public-API contract: every name in
   `structural_computing.__all__` must round-trip through this test;

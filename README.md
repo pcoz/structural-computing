@@ -103,8 +103,8 @@ layer for users widening the in-family boundary.
 
 ## Status
 
-**Alpha** (v0.5.0a1). API may still shift before v1.0, but the public
-surface is now stable enough for downstream prototyping. 272 tests
+**Alpha** (v0.6.0a1). API may still shift before v1.0, but the public
+surface is now stable enough for downstream prototyping. 281 tests
 across ~15 test modules pass; the orchestrator handles all three
 problem types (graphs / constraint sets / signatures) with full
 provenance, including non-symmetric signatures via the general
@@ -114,20 +114,21 @@ constructions, not placeholders -- every v0.2-era `NotImplementedError`
 stub is now a working primitive. v0.3 closed the calibration loop and
 the holographic toolkit; v0.4 added MGI realisability checking,
 Lipton-Tarjan auto-separator, and a closed-form SRP shortcut; v0.5
-closes the three honest-scope gaps documented in v0.4:
+closed three honest-scope gaps (full d-admissibility at arity 6
+odd-parity, Lipton-Tarjan tree-edge backup, closed-form SRP for
+complex roots); **v0.6** is a cleanup + math-completeness round:
 
-- **Full Cai-Lu §4 d-admissibility** at even arity ≥ 6 odd-parity
-  via the augmented-Pfaffian Plücker enumeration. The
-  `realisability_check` field now reports `"plucker_arity_n_full"`
-  for a proven-sufficient check, closing v0.4's "tight necessary"
-  caveat.
-- **Spanning-tree fundamental-cycle backup** for the Lipton-Tarjan
-  auto-separator, catching adversarial planar graphs (e.g.,
-  double-stars) where the BFS-layer simple case fails.
-- **Closed-form SRP for complex-roots rank-2 signatures**: the
-  `T = [[1, -α], [0, β]]` derivation handles NAE-3 and similar
-  cases directly via the recurrence kernel without falling through
-  to the canonical-bases sweep.
+- **Augmented Plücker helper promoted to `holant-tools v0.6.0`**
+  (D1) — the v0.5 prototype-in-place math primitive now lives in
+  the mathematical engine, honouring the architectural principle.
+- **Lipton-Tarjan level-based + articulation-augmentation backup**
+  (D2) — three-step backup chain (simple → tree-edge → level-based)
+  catches star K_{1,n} and complete-bipartite K_{2,n} adversarial
+  graphs that defeat v0.5's tree-edge approach.
+- **|S| = 4 (m = 3) augmented Plücker at arity ≥ 8** (D3) — via
+  `holant-tools v0.6.1`, the augmented enumeration count grows
+  from 280 (m=1) to 560 (m=1 + m=3) at arity 8, and from 1260 to
+  5460 at arity 10.
 
 See [CHANGELOG.md](CHANGELOG.md) for what's in this release and what's
 coming.
@@ -395,7 +396,7 @@ If you use this package in published work, please cite:
 
 ```
 Edward Chalk (sapientronic.ai). "structural-computing: declarative
-structural computation in Python." Version 0.5.0a1, 2026.
+structural computation in Python." Version 0.6.0a1, 2026.
 https://github.com/pcoz/structural-computing
 ```
 
@@ -415,20 +416,28 @@ https://github.com/pcoz/structural-computing
   case of Lipton-Tarjan 1979; closed-form SRP shortcut catching
   rank-1 signatures whose recurrence roots lie outside the v0.3
   search's `[-2, +2]` grid. 262 tests passing.
-- **v0.5.0a1** (current): full Cai-Lu §4 d-admissibility at even
-  arity ≥ 6 odd-parity (augmented-Pfaffian Plücker enumeration on
-  the (n+1)-vertex Kasteleyn matrix, prototype-in-place pending
-  promotion to holant-tools); spanning-tree fundamental-cycle backup
-  for Lipton-Tarjan when the BFS-layer simple case fails on
-  fat-middle-level planar graphs (e.g., double-stars); closed-form
-  SRP for complex-roots rank-2 signatures via `T = [[1, -α], [0, β]]`.
-  272 tests passing.
-- **v0.6.0** (next): promote the v0.5 D1 augmented-Plücker helper
-  from `structural_computing.compose` back to
-  `holant_tools.non_symmetric` (architectural cleanup); full
-  Lipton-Tarjan 1979 backup with the planar dual (handles cases
-  the v0.5 tree-edge backup can't); `|S| ≥ 3` augmented-Plücker
-  configurations at arity ≥ 8; PyPI publication.
+- **v0.5.0a1**: full Cai-Lu §4 d-admissibility at even arity ≥ 6
+  odd-parity (augmented-Pfaffian Plücker enumeration on the
+  (n+1)-vertex Kasteleyn matrix, |S|=2 case, prototype-in-place);
+  spanning-tree fundamental-cycle backup for Lipton-Tarjan when
+  the BFS-layer simple case fails on fat-middle-level planar
+  graphs; closed-form SRP for complex-roots rank-2 signatures via
+  `T = [[1, -α], [0, β]]`. 272 tests passing.
+- **v0.6.0a1** (current): D1 promoted the v0.5 augmented-Plücker
+  helper to `holant-tools v0.6.0` (architectural cleanup, math
+  primitive now lives in the engine); D2 added a level-based +
+  articulation-augmentation backup to `_lipton_tarjan_separator`
+  catching star K_{1,n} and K_{2,n} adversarial graphs; D3 extended
+  the augmented-Plücker enumeration with the m = 3 (|S|=4)
+  configuration via `holant-tools v0.6.1` (count at arity 8: 280 →
+  560; at arity 10: 1260 → 5460). 281 tests passing.
+- **v0.7.0** (next): higher-m augmented Plücker configurations
+  (m = 5 at arity ≥ 10, m = 7 at arity ≥ 12, ...); full
+  Lipton-Tarjan 1979 backup with planar-dual fundamental-cycle
+  counting (for adversarial cases the v0.6 simplification can't
+  bound); tropical optimisation (NEXT.md §δ) and/or CP-SAT
+  diagnostic layer (§ε) as research-track extensions; PyPI
+  publication.
 - **v1.0.0**: API stability contract; production-ready for downstream
   packages.
 
