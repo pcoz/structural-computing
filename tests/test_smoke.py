@@ -181,6 +181,102 @@ def test_v010_min_weight_matching_default_weights_1(sc):
     assert abs(result["cost"] - 2.0) < 1e-9
 
 
+def test_v011_min_cost_flow_basic():
+    """Minimal flow: 1 source supplying 2, 1 sink demanding 2, two
+    parallel edges with different costs/capacities."""
+    import holant_tools
+    from structural_computing import StructuralComputer
+    sc = StructuralComputer()
+
+    src = holant_tools.FlowNode("S", supply=2)
+    snk = holant_tools.FlowNode("T", supply=-2)
+    edges = [
+        holant_tools.FlowEdge(source="S", target="T", cost=1.0, capacity=1),
+        holant_tools.FlowEdge(source="S", target="T", cost=10.0, capacity=2),
+    ]
+    inst = holant_tools.MinCostFlowInstance(sources=[src], sinks=[snk], edges=edges)
+    result = sc.min_cost_flow(inst)
+    assert result["feasible"]
+    assert result["cost"] is not None
+
+
+def test_v011_min_cost_roster_two_employees_two_shifts():
+    """2 employees, 2 shifts, opposing preferences. Optimal pairing:
+    Alice→Morning, Bob→Evening, both at preference cost 1.0 = total 2.0."""
+    import holant_tools
+    from structural_computing import StructuralComputer
+    sc = StructuralComputer()
+
+    employees = [
+        holant_tools.Employee(name="Alice", max_shifts=1),
+        holant_tools.Employee(name="Bob", max_shifts=1),
+    ]
+    shifts = [
+        holant_tools.Shift(name="Morning", headcount=1),
+        holant_tools.Shift(name="Evening", headcount=1),
+    ]
+    inst = holant_tools.RosteringInstance(employees=employees, shifts=shifts)
+
+    def pref(emp, shift):
+        if emp.name == "Alice":
+            return 1.0 if shift.name == "Morning" else 5.0
+        return 5.0 if shift.name == "Morning" else 1.0
+
+    result = sc.min_cost_roster(inst, pref)
+    assert result["feasible"]
+    assert abs(result["cost"] - 2.0) < 1e-9
+    assert result["roster"]["Alice"] == ["Morning"]
+    assert result["roster"]["Bob"] == ["Evening"]
+
+
+def test_v011_min_cost_dedup_basic():
+    """2 records, 2 entity candidates. Verifies the wrapper returns
+    a feasible assignment with cost + entity_groups."""
+    import holant_tools
+    from structural_computing import StructuralComputer
+    sc = StructuralComputer()
+
+    records = [
+        holant_tools.Record(name="R1"),
+        holant_tools.Record(name="R2"),
+    ]
+    candidates = [
+        holant_tools.EntityCandidate(id="E1", capacity=1),
+        holant_tools.EntityCandidate(id="E2", capacity=1),
+    ]
+    inst = holant_tools.MDMInstance(records=records, entity_candidates=candidates)
+
+    def sim(record, candidate):
+        # similarity_fn = COST in holant-tools' convention (lower = better)
+        return 0.1 if (record.name, candidate.id) in {("R1", "E1"), ("R2", "E2")} else 0.9
+
+    result = sc.min_cost_dedup(inst, sim)
+    assert result["feasible"]
+    # Optimal assignment: R1→E1, R2→E2, both at cost 0.1 → total 0.2.
+    assert abs(result["cost"] - 0.2) < 1e-9
+    assert result["assignment"]["R1"] == "E1"
+    assert result["assignment"]["R2"] == "E2"
+
+
+def test_v011_tropical_instance_coordinates_diagnostic():
+    """The one-call diagnostic on a simple uniform-cost SchedulingInstance
+    should return polynomial-time-feasible coordinates."""
+    import holant_tools
+    from structural_computing import StructuralComputer
+    sc = StructuralComputer()
+
+    jobs = [holant_tools.Job(name="J1"), holant_tools.Job(name="J2")]
+    machines = [holant_tools.Machine(name="M1"), holant_tools.Machine(name="M2")]
+    inst = holant_tools.SchedulingInstance(jobs=jobs, machines=machines)
+
+    def cost_fn(job, machine, slot):
+        return 1.0  # uniform — rank-1 cost matrix → polynomial time
+
+    coords = sc.tropical_instance_coordinates(inst, cost_fn)
+    assert coords.polynomial_time_optimisation
+    assert coords.admissibility_rank_1
+
+
 def test_v010_min_cost_schedule_two_jobs_two_machines():
     """Minimal scheduling instance: 2 jobs, 2 machines, asymmetric
     cost. The optimal schedule assigns each job to its preferred

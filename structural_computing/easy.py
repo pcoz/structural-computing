@@ -423,6 +423,74 @@ class StructuralComputer:
             "feasible": True,
         }
 
+    def min_cost_flow(self, instance: Any) -> Dict[str, Any]:
+        """Exact polynomial-time minimum-cost flow on a
+        ``holant_tools.MinCostFlowInstance``.
+
+        Returns ``{"cost", "flow", "feasible"}``.
+        """
+        result = holant_tools.min_cost_flow(instance)
+        if hasattr(result, "feasible") and not result.feasible:
+            return {"cost": None, "flow": None, "feasible": False}
+        return {
+            "cost": float(result.min_cost) if result.min_cost is not None else None,
+            "flow": getattr(result, "flow", None),
+            "feasible": True,
+        }
+
+    def min_cost_roster(self,
+                          instance: Any,
+                          preference_fn: Callable[[Any, Any], float],
+                          ) -> Dict[str, Any]:
+        """Exact polynomial-time minimum-cost rostering on a
+        ``holant_tools.RosteringInstance``.
+
+        Returns ``{"cost", "roster", "feasible"}``.
+        """
+        result = holant_tools.min_cost_roster(instance, preference_fn)
+        if hasattr(result, "feasible") and not result.feasible:
+            return {"cost": None, "roster": None, "feasible": False}
+        return {
+            "cost": float(result.min_cost) if result.min_cost is not None else None,
+            "roster": getattr(result, "roster", None),
+            "feasible": True,
+        }
+
+    def min_cost_dedup(self,
+                         instance: Any,
+                         similarity_fn: Callable[[Any, Any], float],
+                         ) -> Dict[str, Any]:
+        """Exact polynomial-time minimum-cost record-to-entity assignment
+        for entity deduplication on a ``holant_tools.MDMInstance``.
+
+        Returns ``{"cost", "assignment", "entity_groups", "feasible"}``.
+        """
+        result = holant_tools.min_cost_dedup(instance, similarity_fn)
+        if hasattr(result, "feasible") and not result.feasible:
+            return {"cost": None, "assignment": None,
+                    "entity_groups": None, "feasible": False}
+        return {
+            "cost": float(result.min_cost) if result.min_cost is not None else None,
+            "assignment": getattr(result, "assignment", None),
+            "entity_groups": getattr(result, "entity_groups", None),
+            "feasible": True,
+        }
+
+    def tropical_instance_coordinates(self,
+                                        instance: Any,
+                                        cost_fn: Callable[[Any, Any, int], float],
+                                        *,
+                                        compute_field_distance: bool = False,
+                                        ) -> Any:
+        """One-call diagnostic: "is this SchedulingInstance structurally
+        well-suited for tropical optimisation?" Returns the
+        ``TropicalInstanceCoordinates`` dataclass with the four-coordinate
+        viewing-frame apparatus plus tropical-rank diagnostics.
+        """
+        return holant_tools.tropical_instance_coordinates(
+            instance, cost_fn, compute_field_distance=compute_field_distance,
+        )
+
     def single_points_of_failure(self, graph: GraphLike) -> List[Tuple[Any, Any]]:
         """Edges whose removal eliminates all perfect matchings -- the
         structural single points of failure."""

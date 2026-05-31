@@ -6,6 +6,59 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 once it reaches v1.0.0; until then, the v0.x API may shift between minor
 versions.
 
+## [0.11.0a1] — 2026-05-31 (v0.11 arc: finish tropical wiring)
+
+**Closes the tropical-wiring gap left open by v0.10.** v0.10 wired
+the two highest-impact tropical questions (`min_weight_matching`
+and `min_cost_schedule`); v0.11 finishes the job for the remaining
+domain-specific tropical primitives.
+
+### Added
+
+- **`_min_cost_flow_leaf`** — leaf evaluator for
+  `holant_tools.MinCostFlowInstance`. Delegates to
+  `holant_tools.min_cost_flow`. Returns
+  `{"cost", "flow", "feasible"}`.
+- **`_min_cost_roster_leaf`** — leaf evaluator for
+  `holant_tools.RosteringInstance` + a `preference_fn`. Delegates
+  to `holant_tools.min_cost_roster`. Returns
+  `{"cost", "roster", "feasible"}`.
+- **`_min_cost_dedup_leaf`** — leaf evaluator for
+  `holant_tools.MDMInstance` + a `similarity_fn`. Delegates to
+  `holant_tools.min_cost_dedup`. Returns
+  `{"cost", "assignment", "entity_groups", "feasible"}`.
+- **`_tropical_instance_coordinates_leaf`** — the one-call
+  diagnostic on `SchedulingInstance` + `cost_fn`. Returns the
+  `TropicalInstanceCoordinates` dataclass directly (it's not a
+  min-cost question; its fields ARE the diagnostic output).
+- **Registry entries** in DEFAULT_LEAF_REGISTRY for all four
+  under (T2, ...) and (T4, ...).
+- **Wrapper methods** on `StructuralComputer`:
+  - `sc.min_cost_flow(instance) -> dict`
+  - `sc.min_cost_roster(instance, preference_fn) -> dict`
+  - `sc.min_cost_dedup(instance, similarity_fn) -> dict`
+  - `sc.tropical_instance_coordinates(instance, cost_fn, *, compute_field_distance=False) -> TropicalInstanceCoordinates`
+
+### Test count
+
+- 299 passing (295 v0.10 + 4 new v0.11 tests).
+
+### What's still carried forward
+
+The polymorphic lower-level Pfaffian / multilinear evaluators
+(`pfaffian(M, semiring=...)`, `holant_sum_of_pfaffians`,
+`holant_genus_g`, `holant_planar`) remain accessible via direct
+import from `holant_tools`; they don't need orchestrator wiring
+because they're matrix/tensor-level operations rather than
+problem-level questions. Users who need them can `import
+holant_tools; holant_tools.pfaffian(M, semiring=...)`.
+
+After v0.11 the tropical-Holant capability is fully reachable
+through the orchestrator + wrapper for every domain-specific
+primitive in `holant_tools`'s tropical surface.
+
+---
+
 ## [0.10.0a1] — 2026-05-31 (v0.10 arc: tropical optimisation in orchestrator)
 
 **New user-facing capability: min-cost queries on the same admissible-

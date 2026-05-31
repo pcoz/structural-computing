@@ -399,6 +399,126 @@ def _min_cost_schedule_leaf(problem: Any, question: str) -> Dict[str, Any]:
     }
 
 
+def _min_cost_flow_leaf(problem: Any, question: str) -> Dict[str, Any]:
+    """min_cost_flow on a ``holant_tools.MinCostFlowInstance``: exact
+    polynomial-time minimum-cost flow via the tropical Pfaffian dispatch.
+
+    The problem dict must include ``instance`` (a MinCostFlowInstance).
+
+    Returns ``{"cost", "flow", "feasible"}``.
+    """
+    import holant_tools
+    if not isinstance(problem, dict) or "instance" not in problem:
+        raise ValueError(
+            f"min_cost_flow_leaf expects a dict with 'instance' "
+            f"(MinCostFlowInstance); got {type(problem).__name__}"
+        )
+    instance = problem["instance"]
+    result = holant_tools.min_cost_flow(instance)
+    if hasattr(result, "feasible") and not result.feasible:
+        return {"cost": None, "flow": None, "feasible": False}
+    return {
+        "cost": float(result.min_cost) if result.min_cost is not None else None,
+        "flow": getattr(result, "flow", None),
+        "feasible": True,
+    }
+
+
+def _min_cost_roster_leaf(problem: Any, question: str) -> Dict[str, Any]:
+    """min_cost_roster on a ``holant_tools.RosteringInstance``: exact
+    polynomial-time minimum-cost rostering.
+
+    The problem dict must include:
+      - ``instance``: a RosteringInstance
+      - ``preference_fn``: callable ``(employee, shift) -> float``
+
+    Returns ``{"cost", "roster", "feasible"}``.
+    """
+    import holant_tools
+    if not isinstance(problem, dict) or "instance" not in problem:
+        raise ValueError(
+            f"min_cost_roster_leaf expects a dict with 'instance' "
+            f"(RosteringInstance); got {type(problem).__name__}"
+        )
+    instance = problem["instance"]
+    preference_fn = problem.get("preference_fn")
+    if preference_fn is None:
+        raise ValueError(
+            "min_cost_roster_leaf requires a 'preference_fn' callable "
+            "in the problem dict: (employee, shift) -> float"
+        )
+    result = holant_tools.min_cost_roster(instance, preference_fn)
+    if hasattr(result, "feasible") and not result.feasible:
+        return {"cost": None, "roster": None, "feasible": False}
+    return {
+        "cost": float(result.min_cost) if result.min_cost is not None else None,
+        "roster": getattr(result, "roster", None),
+        "feasible": True,
+    }
+
+
+def _min_cost_dedup_leaf(problem: Any, question: str) -> Dict[str, Any]:
+    """min_cost_dedup on a ``holant_tools.MDMInstance``: exact
+    polynomial-time minimum-cost record-to-entity assignment for entity
+    deduplication.
+
+    The problem dict must include:
+      - ``instance``: an MDMInstance
+      - ``similarity_fn``: callable ``(record, entity_candidate) -> float``
+
+    Returns ``{"cost", "assignment", "entity_groups", "feasible"}``.
+    """
+    import holant_tools
+    if not isinstance(problem, dict) or "instance" not in problem:
+        raise ValueError(
+            f"min_cost_dedup_leaf expects a dict with 'instance' "
+            f"(MDMInstance); got {type(problem).__name__}"
+        )
+    instance = problem["instance"]
+    similarity_fn = problem.get("similarity_fn")
+    if similarity_fn is None:
+        raise ValueError(
+            "min_cost_dedup_leaf requires a 'similarity_fn' callable "
+            "in the problem dict: (record, candidate) -> float"
+        )
+    result = holant_tools.min_cost_dedup(instance, similarity_fn)
+    if hasattr(result, "feasible") and not result.feasible:
+        return {"cost": None, "assignment": None,
+                "entity_groups": None, "feasible": False}
+    return {
+        "cost": float(result.min_cost) if result.min_cost is not None else None,
+        "assignment": getattr(result, "assignment", None),
+        "entity_groups": getattr(result, "entity_groups", None),
+        "feasible": True,
+    }
+
+
+def _tropical_instance_coordinates_leaf(problem: Any, question: str) -> Any:
+    """tropical_instance_coordinates on a SchedulingInstance: the one-call
+    "is this instance structurally well-suited for tropical optimisation?"
+    diagnostic. Returns the TropicalInstanceCoordinates dataclass as-is
+    (its fields are themselves the diagnostic output; we don't normalise
+    to {cost, ...} because this isn't a min-cost question).
+    """
+    import holant_tools
+    if not isinstance(problem, dict) or "instance" not in problem:
+        raise ValueError(
+            f"tropical_instance_coordinates_leaf expects a dict with "
+            f"'instance'; got {type(problem).__name__}"
+        )
+    instance = problem["instance"]
+    cost_fn = problem.get("cost_fn")
+    if cost_fn is None:
+        raise ValueError(
+            "tropical_instance_coordinates_leaf requires a 'cost_fn' "
+            "callable in the problem dict: (job, machine, slot) -> float"
+        )
+    compute_field_distance = problem.get("compute_field_distance", False)
+    return holant_tools.tropical_instance_coordinates(
+        instance, cost_fn, compute_field_distance=compute_field_distance,
+    )
+
+
 # ---------- Constraint-set leaf evaluators ---------------------------------
 
 def _count_solutions_leaf(problem: Any, question: str) -> int:
@@ -648,6 +768,20 @@ DEFAULT_LEAF_REGISTRY: Dict[Tuple[str, str], LeafEvaluator] = {
     # classifier is fully integrated.
     ("T2", "min_cost_schedule"):         _min_cost_schedule_leaf,
     ("T4", "min_cost_schedule"):         _min_cost_schedule_leaf,
+    # v0.11: remaining tropical primitives wired through the orchestrator.
+    # These accept domain-specific instances (MinCostFlowInstance,
+    # RosteringInstance, MDMInstance) rather than graphs; we register
+    # them under the same (T2, T4) labels so the classifier can route
+    # them through the existing dispatcher even when no tier is set
+    # explicitly. The actual instance type is inspected by the leaf.
+    ("T2", "min_cost_flow"):             _min_cost_flow_leaf,
+    ("T4", "min_cost_flow"):             _min_cost_flow_leaf,
+    ("T2", "min_cost_roster"):           _min_cost_roster_leaf,
+    ("T4", "min_cost_roster"):           _min_cost_roster_leaf,
+    ("T2", "min_cost_dedup"):            _min_cost_dedup_leaf,
+    ("T4", "min_cost_dedup"):            _min_cost_dedup_leaf,
+    ("T2", "tropical_instance_coordinates"): _tropical_instance_coordinates_leaf,
+    ("T4", "tropical_instance_coordinates"): _tropical_instance_coordinates_leaf,
 }
 
 
