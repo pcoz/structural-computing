@@ -64,7 +64,7 @@ Homepage = "https://github.com/pcoz/structural-computing"
 Documentation = "https://github.com/pcoz/free-fermion-quantum-simulation/tree/main/docs"
 Repository = "https://github.com/pcoz/structural-computing"
 "Worked examples" = "https://github.com/pcoz/free-fermion-quantum-simulation"
-"Mathematical engine (holant-tools)" = "https://github.com/pcoz/holant-tools"
+"Math engine (holant-tools)" = "https://github.com/pcoz/holant-tools"
 Changelog = "https://github.com/pcoz/structural-computing/blob/main/CHANGELOG.md"
 
 [tool.setuptools.packages.find]
