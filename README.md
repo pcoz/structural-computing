@@ -27,12 +27,6 @@ external tool. No silent approximation.
 > [CP-SAT pre-flight](book/examples/11_cpsat_preflight/)), and
 > a [one-page business case](book/01a-the-business-case-in-one-page.md)
 > with concrete dollar figures.
->
-> **Three reading paths** (in the [index](docs/book.md)):
-> *business analyst* (skip the code; ~2 hours), *engineer*
-> (read the whole thing; ~6 hours), *CTO/VP Engineering*
-> (preface + Ch 1, 1a, 4, 15; ~45 minutes for the
-> build-versus-buy reframe).
 
 ## What this lets you do
 
