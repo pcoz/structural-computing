@@ -150,7 +150,9 @@ result = sc.rewrite_cpsat_model(model)
 if result.helped:
     print(result.help_reason_text)
     # "Rewrote 1 constraint(s) to time-slot rank-1 form;
-    #  added 8 auxiliary boolean(s)."
+    #  added N auxiliary boolean(s)."   (N depends on the
+    #  constraint shape — see the runnable example for the
+    #  actual numbers)
     solver = cp_model.CpSolver()
     solver.Solve(result.rewritten_model)
 else:

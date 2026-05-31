@@ -259,6 +259,21 @@ and the brute-force code and compare. The MIP-form code would
 be hundreds of lines; the brute-force code is dozens; the
 framework code is one line.
 
+> **A note on the example's MIP comparison.** The runnable
+> example contrasts the framework with a brute-force loop, not
+> with an actual MIP solver. We did this deliberately: standing
+> up a MIP solver in the example folder would require either a
+> commercial licence (Gurobi, CPLEX) or a noisy installation
+> of the free CBC solver, neither of which makes the example
+> portable. The brute-force approach is the simplest stand-in
+> for "what you'd write without the framework"; at 5×5 it's
+> fine, but at 10×10 it's already 3.6 million permutations
+> (impossibly slow), which is the same scaling problem MIP
+> solvers face on hard instances. The chapter's argument is
+> about the framework versus MIP at production scale; the
+> example demonstrates the framework's *correctness* on a
+> learnable scale.
+
 ## What this chapter taught you
 
 1. **MIP solvers are general-purpose.** They handle a wide

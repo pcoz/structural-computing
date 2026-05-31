@@ -31,17 +31,18 @@ sampling apparatus exists because the field decided, a long time
 ago, that exact computation was intractable.
 
 It isn't. Not for this shape of problem. And once you delete
-the sampling machinery, the question itself fits in about
-ten lines:
+the sampling machinery, the question itself fits in just a few
+lines using today's framework:
 
 ```python
-hazard = pipeline.load_hazard_graph("california_seismic.geojson")
-portfolio = pipeline.load_exposure("treaty_2024.parquet")
-loss_dist = pipeline.exact_loss_distribution(
-    hazard, portfolio,
-    quantiles=[0.99, 0.995, 0.999],
-)
-print(loss_dist.tail_summary())
+from structural_computing import StructuralComputer
+sc = StructuralComputer()
+
+# `hazard_edges` is the list of (component_a, component_b) tuples
+# describing which hazard components are connected on the
+# geographic map; per-edge failure probabilities live in `weights`.
+loss_dist = sc.tail_probability(hazard_edges, p_fail=0.005)
+print(loss_dist)
 ```
 
 That's the form. Once you've got that, *everything else* is
@@ -49,6 +50,21 @@ gone — the sampling loops, the variance-reduction tricks, the
 seed management, the confidence-interval computation, the
 parallelisation infrastructure. All vanishes. Only the question
 remains.
+
+The aspiration — that this is *literally* one line per business
+question via a catastrophe-modelling-specific DSL on top of the
+framework — is the **year-10 vision** discussed in Chapter 16.
+Today you'd write a few extra lines to parse the input and
+shape it into the framework's edge list, but the **simulator
+itself is gone**. The collapse is real now, not in fifteen
+years.
+
+> **Roadmap tracking.** The catastrophe-modelling DSL is tracked
+> as a v1.2.0+ item in the project's roadmap; see
+> `admissibility-geometry/NEXT.md` § "Open follow-ons" → item 1a
+> ("Catastrophe-modelling DSL"). When that DSL ships to PyPI,
+> this preface paragraph will be updated to use the real
+> one-liner form and drop the "year-10 vision" framing.
 
 ## What this book is
 
@@ -80,22 +96,45 @@ covers:
 
 ## Who you are
 
-You're a software engineer or analyst who's run into the same
-pattern enough times that you suspect there must be a better
-way. You've maintained a Monte Carlo simulator that takes
-twelve hours to converge on an answer your boss needed
-yesterday. You've timed-out a MIP solver on a scheduling
-problem that "felt" easy. You've watched a CP-SAT pipeline
-inflate a model with auxiliary variables until the solver gave
-up.
+The book has been written with **three audiences** in mind, and
+each gets a slightly different reading path:
 
-This book is the answer to those experiences for the subset of
-problems where the answer is "yes, there's a better way, and
-here it is."
+1. **Software engineers** who've run into the same Monte Carlo
+   / MIP / CP-SAT pattern enough times that you suspect there
+   must be a better way. You've maintained a Monte Carlo
+   simulator that takes twelve hours to converge on an answer
+   your boss needed yesterday. You've timed-out a MIP solver
+   on a scheduling problem that "felt" easy. You've watched a
+   CP-SAT pipeline inflate a model with auxiliary variables
+   until the solver gave up. The book is the answer to those
+   experiences. **Read the whole thing.**
 
-For the problems where the answer is "no, the framework can't
-help you" — and there are plenty — the book will help you
-recognise those quickly too. That's worth the read on its own.
+2. **Business analysts** who don't write production code but
+   need to understand what your engineering team would buy
+   from this framework, and how much it could save. The book
+   has a one-page business case (Chapter 1a) and three later
+   chapters that quantify the industry-level economics
+   (Chapter 15). The paradigm itself (Chapter 3) is presented
+   without math notation, in five plain-English words.
+   **Read the preface, Chapters 1, 1a, 3, 4, 5, and 15.** Skip
+   the code blocks; you don't need them. The reading takes
+   about two hours and gives you the full business picture.
+
+3. **CTOs and VPs Engineering** who want to know whether the
+   framework is a *strategic build-versus-buy reframing*
+   candidate for your stack. Read Chapter 1 (Sara's company),
+   Chapter 1a (the business case), Chapter 4 (will the
+   framework help my problem?), and Chapter 15 (three
+   industries that change). About 45 minutes; gives you enough
+   to make a five-minute decision about whether to commission
+   a pilot.
+
+For all three audiences, the key honest message is the same:
+the framework gives exact answers when it can, refuses
+honestly when it can't, and the "refuses honestly" case is a
+feature, not a limitation. Half the book is about the value
+it adds; the other half is about how to recognise when it
+isn't relevant.
 
 ## What you'll have at the end
 

@@ -105,14 +105,26 @@ print(result.helped)
 # True
 
 print(result.help_reason_text)
-# "Rewrote 1 constraint(s) to time-slot rank-1 form; added 8
+# "Rewrote 1 constraint(s) to time-slot rank-1 form; added 40
 #  auxiliary boolean(s)."
 ```
 
 The framework has identified the cardinality constraint,
 recognised that it's rewritable, and produced a new model with
 the constraint replaced by a rank-1 form. The new model has
-the original 10 variables plus 8 auxiliary variables.
+the original 10 variables plus 40 auxiliary variables.
+
+If 40 auxiliary variables sounds like a lot for a 10-variable
+constraint, remember the *point* of the rewrite: the original
+constraint was rank-explosive — its rank scaled badly with the
+problem size. The rewritten form has rank 1, which scales
+linearly. As your problem grows, the auxiliary-variable
+overhead grows as `O(n · k)` (where `k` is the cardinality
+bound), but the solver's effort to handle the constraint
+**drops**, often by orders of magnitude. The trade is "a few
+more variables now, much faster solve later". On the small
+example here that trade is invisible; on production models
+with hundreds of variables it can be transformative.
 
 You verify the rewrite preserves the feasible set:
 
@@ -259,6 +271,26 @@ know about your model class.
 In practice, Pattern 1 is fine for most use cases. The
 pre-flight is cheap; honest stops are fast; the wins on
 rewritable constraints are large.
+
+> **A note on the example's scale.** The runnable example
+> in [`book/examples/11_cpsat_preflight/`](examples/11_cpsat_preflight/)
+> uses 8 boolean variables with a single cardinality constraint
+> (`sum(xs) == 4`). At that size, both the original and the
+> rewritten CP-SAT models solve in milliseconds, so the example
+> doesn't *demonstrate* a speedup — it demonstrates the
+> *mechanism*: the framework reads your model, identifies a
+> rewritable constraint, produces an equivalent model, and you
+> can verify equivalence by enumeration. The chapter's
+> argument about CP-SAT speedups applies at production scale
+> (hundreds of variables, multiple rewritable constraints),
+> where the rank-explosive cost CP-SAT pays on the original
+> formulation becomes the bottleneck. On the example's tiny
+> 8-variable model, the framework adds 40 auxiliary booleans
+> for a model that wasn't bottlenecked in the first place; on
+> a production 1,000-variable model, the same rewrite pattern
+> shifts the solver's work from exponential-in-the-cardinality-
+> bound to linear. The example proves the framework works; the
+> chapter's economics describe where it matters.
 
 ## What this chapter taught you
 

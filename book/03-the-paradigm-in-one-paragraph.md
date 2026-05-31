@@ -253,7 +253,7 @@ That's the paradigm. Five words: structured system, declarative
 question, structural shape, semiring choice, honest stop.
 
 You'll meet all five again in the worked examples (Chapters
-8–10), where we'll do them concretely on real problems. Before
+9–11), where we'll do them concretely on real problems. Before
 we get there, the next chapter — Chapter 4 — answers the most
 practical question this book can: *given a problem, how do you
 tell, in under a minute, whether the framework will help?*

@@ -39,6 +39,7 @@ in passing.
 ### Part I — The paradigm
 
 - [Chapter 1 — The 100,000-line problem](../book/01-the-100k-line-problem.md)
+- [Chapter 1a — The business case, in one page](../book/01a-the-business-case-in-one-page.md)
 - [Chapter 2 — The SQL story, retold](../book/02-the-sql-story-retold.md)
 - [Chapter 3 — Declarative structural computing in one paragraph](../book/03-the-paradigm-in-one-paragraph.md)
 - [Chapter 4 — Will the framework help my problem?](../book/04-when-it-applies.md)
@@ -84,14 +85,24 @@ explaining what the example demonstrates and how to run it.
 
 ## How to read this book
 
-**If you have an hour:** read the preface, Chapter 1, Chapter 3,
-and Chapter 9. That's the paradigm plus one worked example.
-You'll have enough to decide whether the framework is relevant
-to you.
+**If you're a business analyst (and not a developer):** read
+the preface, Chapter 1, Chapter 1a (the business case),
+Chapter 3 (the paradigm in five plain-English words),
+Chapter 4 (will it help my problem?), Chapter 5 (patterns that
+fit), and Chapter 15 (three industries that change). That's
+about half the book and gives you the whole business picture
+without requiring you to read Python. Skip the code blocks —
+they're there for the developers on your team.
 
-**If you have an afternoon:** add Chapters 10 and 11. That
-covers all three worked examples — the imperative-to-declarative
-move will be concrete in three different domains.
+**If you have an hour as a developer:** read the preface,
+Chapter 1, Chapter 1a, Chapter 3, and Chapter 9. That's the
+paradigm, the business case, and one worked example. You'll
+have enough to decide whether the framework is relevant.
+
+**If you have an afternoon as a developer:** add Chapters 10
+and 11. That covers all three worked examples — the
+imperative-to-declarative move will be concrete in three
+different domains.
 
 **If you have a weekend:** read the whole thing. Part II makes
 you fluent in the mental model. Part IV teaches you the

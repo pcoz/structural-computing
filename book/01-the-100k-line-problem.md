@@ -206,7 +206,7 @@ exact answer.
 For questions that don't have the right shape, it tells you so
 honestly and recommends what tool you should be using
 instead. (This honest "no" is — surprisingly — one of the most
-valuable things the framework does. Chapter 7 is entirely
+valuable things the framework does. Chapter 8 is entirely
 about this.)
 
 ## A small honest caveat
