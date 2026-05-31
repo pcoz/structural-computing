@@ -522,6 +522,107 @@ def _min_cost_dedup_leaf(problem: Any, question: str) -> Dict[str, Any]:
     }
 
 
+def _diagnose_constraints_leaf(problem: Any, question: str) -> Any:
+    """diagnose_constraints on a list of ``holant_tools.ConstraintSpec``:
+    runs the encoding-selection diagnostic to determine which encoding
+    family is structurally optimal.
+
+    The problem dict must include ``constraints`` (a list of
+    ``ConstraintSpec``).
+
+    Returns the ``EncodingDiagnostic`` dataclass directly (its fields
+    ARE the diagnostic output: per-constraint diagnostics,
+    recommended encoding, aggregate complexity class, reasoning).
+    """
+    import holant_tools
+    if not isinstance(problem, dict) or "constraints" not in problem:
+        raise ValueError(
+            f"diagnose_constraints_leaf expects a dict with "
+            f"'constraints' (list of ConstraintSpec); got "
+            f"{type(problem).__name__}"
+        )
+    return holant_tools.diagnose_constraints(problem["constraints"])
+
+
+def _rewrite_constraints_leaf(problem: Any, question: str) -> Any:
+    """rewrite_constraints on a list of ``holant_tools.ConstraintSpec``:
+    produces a ``RewriteSetBlueprint`` describing how the rewritable
+    constraints would be transformed into rank-1 time-slot equivalents.
+
+    The problem dict must include ``constraints``.
+
+    Returns the ``RewriteSetBlueprint`` dataclass directly.
+    """
+    import holant_tools
+    if not isinstance(problem, dict) or "constraints" not in problem:
+        raise ValueError(
+            f"rewrite_constraints_leaf expects a dict with "
+            f"'constraints'; got {type(problem).__name__}"
+        )
+    return holant_tools.rewrite_constraints(problem["constraints"])
+
+
+def _rewrite_cpsat_model_leaf(problem: Any, question: str) -> Any:
+    """rewrite_cpsat_model on an ``ortools.sat.python.cp_model.CpModel``:
+    rewrites rank-explosive CP-SAT constraints to rank-1 time-slot
+    equivalents where the structural diagnostic recommends.
+
+    The problem dict must include ``model`` (a ``cp_model.CpModel``).
+    Optional: ``rewrite_kinds`` to restrict which constraint kinds
+    get rewritten.
+
+    Returns the ``CPSATRewriteResult`` dataclass directly. The result
+    carries ``helped: bool`` and ``help_reason_text`` so callers can
+    branch on whether the rewrite actually helps.
+    """
+    import holant_tools
+    if not isinstance(problem, dict) or "model" not in problem:
+        raise ValueError(
+            f"rewrite_cpsat_model_leaf expects a dict with 'model' "
+            f"(cp_model.CpModel); got {type(problem).__name__}"
+        )
+    return holant_tools.rewrite_cpsat_model(
+        problem["model"],
+        rewrite_kinds=problem.get("rewrite_kinds"),
+    )
+
+
+def _verify_cpsat_rewrite_equivalence_leaf(problem: Any, question: str) -> Any:
+    """verify_cpsat_rewrite_equivalence: checks that a CP-SAT rewrite
+    preserves the feasible set (and optionally the optimal objective)
+    on the original variables.
+
+    The problem dict must include:
+      - ``original_model``: the original ``cp_model.CpModel``
+      - ``rewrite_result``: a ``CPSATRewriteResult`` from
+        ``rewrite_cpsat_model``
+
+    Optional: ``enumeration_limit`` (default 10000),
+    ``check_objective`` (default True), ``max_witnesses`` (default 5).
+
+    Returns the ``CPSATVerificationResult`` dataclass directly.
+    """
+    import holant_tools
+    if not isinstance(problem, dict) or "original_model" not in problem:
+        raise ValueError(
+            f"verify_cpsat_rewrite_equivalence_leaf expects a dict "
+            f"with 'original_model' and 'rewrite_result'; got "
+            f"{type(problem).__name__}"
+        )
+    if "rewrite_result" not in problem:
+        raise ValueError(
+            "verify_cpsat_rewrite_equivalence_leaf requires "
+            "'rewrite_result' (a CPSATRewriteResult) in the problem dict"
+        )
+    return holant_tools.verify_cpsat_rewrite_equivalence(
+        problem["original_model"],
+        problem["rewrite_result"],
+        enumeration_limit=problem.get("enumeration_limit", 10000),
+        check_objective=problem.get("check_objective", True),
+        max_witnesses=problem.get("max_witnesses", 5),
+    )
+
+
 def _tropical_instance_coordinates_leaf(problem: Any, question: str) -> Any:
     """tropical_instance_coordinates on a SchedulingInstance: the one-call
     "is this instance structurally well-suited for tropical optimisation?"
@@ -811,6 +912,19 @@ DEFAULT_LEAF_REGISTRY: Dict[Tuple[str, str], LeafEvaluator] = {
     ("T4", "min_cost_dedup"):            _min_cost_dedup_leaf,
     ("T2", "tropical_instance_coordinates"): _tropical_instance_coordinates_leaf,
     ("T4", "tropical_instance_coordinates"): _tropical_instance_coordinates_leaf,
+    # v0.13: CP-SAT diagnostic + rewrite layer. Structural diagnostic
+    # on cp_model.CpModel instances + abstract ConstraintSpec lists,
+    # so users can pre-flight whether their CP-SAT problem has a
+    # holographic shortcut and get either a faster rewritten model OR
+    # an explicit "can't help here" signal.
+    ("T2", "diagnose_constraints"):           _diagnose_constraints_leaf,
+    ("T4", "diagnose_constraints"):           _diagnose_constraints_leaf,
+    ("T2", "rewrite_constraints"):            _rewrite_constraints_leaf,
+    ("T4", "rewrite_constraints"):            _rewrite_constraints_leaf,
+    ("T2", "rewrite_cpsat_model"):            _rewrite_cpsat_model_leaf,
+    ("T4", "rewrite_cpsat_model"):            _rewrite_cpsat_model_leaf,
+    ("T2", "verify_cpsat_rewrite"):           _verify_cpsat_rewrite_equivalence_leaf,
+    ("T4", "verify_cpsat_rewrite"):           _verify_cpsat_rewrite_equivalence_leaf,
 }
 
 
@@ -1449,6 +1563,30 @@ class Orchestrator:
                 reasoning=(f"multi-signature problem ({len(problem['signatures'])} "
                             f"symmetric signatures) for SRP common-basis search"),
             ), "classify_signatures_multi")
+        # v0.13: CP-SAT diagnostic dicts. Two shapes:
+        #   - {"constraints": [ConstraintSpec, ...]} for abstract
+        #     diagnostic / rewrite-blueprint generation.
+        #   - {"model": cp_model.CpModel, ...} for direct CpModel
+        #     rewriting.
+        #   - {"original_model": ..., "rewrite_result": ...} for
+        #     equivalence verification.
+        # All route to T2 for the registered CP-SAT leaf evaluators.
+        if ("constraints" in problem
+                or "model" in problem
+                or "original_model" in problem):
+            kind_hint = (
+                "constraints_list" if "constraints" in problem
+                else "cpsat_model" if "model" in problem
+                else "cpsat_verification"
+            )
+            return (Classification(
+                tier="T2",
+                meters={"problem_kind": "cpsat_diagnostic",
+                        "subkind": kind_hint},
+                in_family=True,
+                reasoning=(f"CP-SAT diagnostic problem ({kind_hint}) "
+                            f"routed to T2 for diagnostic leaf dispatch"),
+            ), "classify_cpsat_diagnostic")
         # v0.12: tropical instance-based dicts (no rotation/A/values).
         # These come from the StructuralComputer wrappers for the
         # tropical family: min_cost_flow, min_cost_roster,

@@ -466,6 +466,71 @@ class StructuralComputer:
         }
         return self._delegate(problem, "tropical_instance_coordinates")
 
+    # -- CP-SAT diagnostic + rewrite layer (v0.13) --------------------------
+
+    def diagnose_constraints(self, constraints: Sequence[Any]) -> Any:
+        """Run the encoding-selection diagnostic on a list of
+        ``holant_tools.ConstraintSpec``. Returns the
+        ``EncodingDiagnostic`` dataclass with per-constraint
+        diagnostics + an aggregate recommended encoding."""
+        return self._delegate(
+            {"constraints": list(constraints)}, "diagnose_constraints",
+        )
+
+    def rewrite_constraints(self, constraints: Sequence[Any]) -> Any:
+        """Produce a ``RewriteSetBlueprint`` describing how the
+        rewritable constraints in the input would be transformed into
+        rank-1 time-slot equivalents."""
+        return self._delegate(
+            {"constraints": list(constraints)}, "rewrite_constraints",
+        )
+
+    def rewrite_cpsat_model(self,
+                              model: Any,
+                              *,
+                              rewrite_kinds: Optional[Sequence[str]] = None,
+                              ) -> Any:
+        """Rewrite rank-explosive CP-SAT constraints in a
+        ``cp_model.CpModel`` to rank-1 time-slot equivalents where the
+        structural diagnostic recommends.
+
+        Returns a ``CPSATRewriteResult`` carrying:
+
+        - ``rewritten_model``: the transformed ``cp_model.CpModel`` (or
+          the original if no rewrite helped).
+        - ``helped: bool``: whether the rewrite actually applies.
+        - ``help_reason_text``: a human-readable explanation either way.
+
+        Callers can branch on ``helped`` to decide whether to solve the
+        rewritten or the original model.
+        """
+        problem = {"model": model, "rewrite_kinds": rewrite_kinds}
+        return self._delegate(problem, "rewrite_cpsat_model")
+
+    def verify_cpsat_rewrite(self,
+                               original_model: Any,
+                               rewrite_result: Any,
+                               *,
+                               enumeration_limit: int = 10000,
+                               check_objective: bool = True,
+                               max_witnesses: int = 5,
+                               ) -> Any:
+        """Verify that a CP-SAT rewrite preserves the feasible set (and
+        optionally the optimal objective) on the original variables.
+
+        Returns a ``CPSATVerificationResult`` carrying ``equivalent: bool``
+        plus diagnostic details (missing / spurious witnesses, optimal
+        objectives compared, enumeration-limit-hit flag).
+        """
+        problem = {
+            "original_model": original_model,
+            "rewrite_result": rewrite_result,
+            "enumeration_limit": enumeration_limit,
+            "check_objective": check_objective,
+            "max_witnesses": max_witnesses,
+        }
+        return self._delegate(problem, "verify_cpsat_rewrite")
+
     def single_points_of_failure(self, graph: GraphLike) -> List[Tuple[Any, Any]]:
         """Edges whose removal eliminates all perfect matchings -- the
         structural single points of failure. Delegates to the

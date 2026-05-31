@@ -6,6 +6,95 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 once it reaches v1.0.0; until then, the v0.x API may shift between minor
 versions.
 
+## [0.13.0a1] — 2026-05-31 (v0.13 arc: CP-SAT diagnostic layer)
+
+**New user-facing capability: pre-flight your CP-SAT model.** The
+orchestrator now wires holant-tools' CP-SAT diagnostic + rewrite
+surface, so users can hand their `cp_model.CpModel` instances to
+the framework and get back either (a) a structurally cheaper
+rewritten model, or (b) an explicit "can't help here" signal.
+
+Closes the last major carried-forward item from the v0.6-era
+follow-on list.
+
+### Added
+
+- **`_diagnose_constraints_leaf`** — leaf evaluator for abstract
+  ``ConstraintSpec`` list inputs. Delegates to
+  ``holant_tools.diagnose_constraints``. Returns the
+  ``EncodingDiagnostic`` dataclass.
+- **`_rewrite_constraints_leaf`** — leaf evaluator producing a
+  ``RewriteSetBlueprint``.
+- **`_rewrite_cpsat_model_leaf`** — leaf evaluator for direct
+  ``cp_model.CpModel`` inputs. Delegates to
+  ``holant_tools.rewrite_cpsat_model``. Returns the
+  ``CPSATRewriteResult`` dataclass carrying ``helped: bool`` and
+  ``help_reason_text`` so callers can branch on whether the
+  rewrite actually helps.
+- **`_verify_cpsat_rewrite_equivalence_leaf`** — leaf evaluator
+  that checks a rewrite preserves the feasible set + optional
+  objective.
+- **Registry entries** in DEFAULT_LEAF_REGISTRY for all four
+  under ``(T2, ...)`` and ``(T4, ...)``.
+- **Wrapper methods** on ``StructuralComputer``:
+  - ``sc.diagnose_constraints(constraints) -> EncodingDiagnostic``
+  - ``sc.rewrite_constraints(constraints) -> RewriteSetBlueprint``
+  - ``sc.rewrite_cpsat_model(model, *, rewrite_kinds=None) -> CPSATRewriteResult``
+  - ``sc.verify_cpsat_rewrite(original_model, rewrite_result, *, enumeration_limit=10000, check_objective=True, max_witnesses=5) -> CPSATVerificationResult``
+
+### Orchestrator-side classifier extension
+
+``_classify_problem`` now recognises CP-SAT diagnostic dicts
+in three shapes:
+
+- ``{"constraints": [ConstraintSpec, ...]}`` (abstract list)
+- ``{"model": cp_model.CpModel, ...}`` (direct rewrite)
+- ``{"original_model": ..., "rewrite_result": ...}`` (verification)
+
+All route to T2 with ``problem_kind = "cpsat_diagnostic"``.
+
+### Test count
+
+- 302 passing (299 v0.12 + 3 new v0.13 tests, gated on the
+  presence of ``ortools.sat.python.cp_model`` via
+  ``pytest.importorskip``).
+
+### Worked example
+
+```python
+from structural_computing import StructuralComputer
+from ortools.sat.python import cp_model
+
+sc = StructuralComputer()
+model = cp_model.CpModel()
+xs = [model.NewBoolVar(f"x{i}") for i in range(4)]
+model.Add(sum(xs) == 2)
+
+result = sc.rewrite_cpsat_model(model)
+# result.helped == True
+# result.help_reason_text == "Rewrote 1 constraint(s) to time-slot
+#   rank-1 form; added 8 auxiliary boolean(s)."
+
+verify = sc.verify_cpsat_rewrite(model, result, enumeration_limit=1000)
+# verify.equivalent == True
+# verify.n_original_solutions == 6  (= C(4, 2))
+```
+
+### What's still open after v0.13
+
+After v0.13 the major carried-forward list from v0.6 is closed:
+
+- ✅ Higher-m augmented Plücker (v0.8)
+- ✅ Full LT 1979 with planar-dual (v0.9)
+- ✅ Tropical optimisation in orchestrator (v0.10–v0.11)
+- ✅ Wrapper consolidation (v0.12)
+- ✅ CP-SAT / Gurobi diagnostic layer (this release)
+
+Open items now are smaller-scale polish: documentation passes,
+additional worked examples for the CP-SAT path, etc.
+
+---
+
 ## [0.12.0a1] — 2026-05-31 (v0.12 arc: wrapper consolidation)
 
 **Architectural cleanup.** `StructuralComputer` now holds an
