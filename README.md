@@ -116,10 +116,27 @@ Monte-Carlo and the question's signal lives below the sampling floor.
 
 ## More worked examples
 
+Three more one-screen examples, each in a different domain.
+They use the same `StructuralComputer` object — only the
+question changes. If you've read the book ([`docs/book.md`](docs/book.md)),
+these are condensed versions of Chapters 9, 10, and 11; if
+you haven't, they're the fastest way to see the framework's
+range across reliability, optimisation, and pre-flighting an
+existing CP-SAT solver.
+
 ### Min-cost matching (tropical / Hungarian / Edmonds)
 
-The same admissible-set machinery that counts matchings computes
-the CHEAPEST matching under the tropical (min, +) semiring:
+Suppose each edge of a graph has a weight (a cost) and you want
+the cheapest set of edges that pairs up every vertex exactly
+once. This is the **min-weight perfect matching** problem, and
+it shows up in production code under many names — assignment
+problems, dispatching, package routing, ad-slot allocation.
+The framework solves it exactly in polynomial time. The
+underlying algorithm is the same one used for counting
+matchings; only the arithmetic changes (replace standard
+`(+, ×)` with the tropical `(min, +)` semiring). You don't
+mention the semiring anywhere in the call — the question
+name `min_weight_matching` selects it for you:
 
 ```python
 from structural_computing import StructuralComputer
@@ -137,10 +154,19 @@ blossom (general non-bipartite); no MIP timeout, no heuristic.
 
 ### CP-SAT pre-flight: faster solve via structural rewrite
 
-For models with rank-explosive constraints (cardinality constraints,
-all-different over a small range, etc.), pass your `cp_model.CpModel`
-through `sc.rewrite_cpsat_model(...)` to get either a structurally
-cheaper rewritten model OR an explicit "can't help here" signal:
+If you already use Google's OR-Tools CP-SAT solver and don't
+want to migrate away from it, the framework can sit *upstream*
+of CP-SAT as a structural pre-processor. It reads your
+`cp_model.CpModel`, identifies *rank-explosive* constraints —
+cardinality (`sum(xs) == k`), at-most-k, certain all-different
+patterns — and rewrites them into a form CP-SAT handles more
+efficiently. The rewrite is mathematically equivalent on the
+original variables; you verify equivalence on a sample and then
+deploy with confidence. If no rewrite applies, the framework
+honestly says so via `result.helped == False` and you solve the
+original model — nothing has been changed, nothing is at risk.
+The total integration is three new lines around your existing
+`solver.Solve(model)` call:
 
 ```python
 from structural_computing import StructuralComputer
@@ -177,7 +203,17 @@ verify = sc.verify_cpsat_rewrite(model, result, enumeration_limit=1000)
 
 ### Schedule optimisation in one line
 
-`min_cost_schedule` wraps the full tropical scheduling pipeline:
+Job-to-machine assignment, surgical rooming, nurse rostering,
+truck-to-route dispatch — the standard shape is *N things to
+assign to M slots subject to constraints, minimising total
+cost*. Production teams typically reach for a MIP solver
+(Gurobi, CPLEX, CBC) here. For the large fraction of these
+problems where the cost structure has the right rank — which
+is most of them in practice — the framework solves them
+exactly in polynomial time via the Hungarian algorithm (under
+the floor), with no commercial licence and no possibility of
+solver timeout. The whole thing fits in one
+`sc.min_cost_schedule(...)` call:
 
 ```python
 import holant_tools
@@ -223,16 +259,46 @@ their own evaluators. The `transform.py` / `compose.py` / `decompose.py`
 modules expose the reductions / compositions / recursive-decomposition
 layer for users widening the in-family boundary.
 
+## Where the framework helps — and where it stops
+
+The framework's exact polynomial-time answers apply when your
+problem has the right **structural shape** — typically planar
+graphs, bounded-genus graphs, GF(2)-affine constraint sets, or
+the matchgate-Holant family. In practice this covers a lot of
+real-world problems: most physical-infrastructure networks
+(grids, pipes, roads), most workflow graphs, many scheduling
+and assignment instances, and a sizeable fraction of CP-SAT
+models with rank-explosive constraints.
+
+For problems that don't *natively* fit one of these shapes,
+there's a second route: the reductions / compositions /
+recursive-decomposition layer can sometimes *bring them in*. A
+non-planar graph with a small number of "extra" edges can be
+hybrid-decomposed back into planar pieces; a constraint set
+with the wrong rank structure can sometimes be rewritten; a
+bounded-treewidth problem can be solved by recursive DP. The
+book ([`docs/book.md`](docs/book.md)) chapter on "Five patterns
+that fit, five that don't" walks through this in detail.
+
+When neither route applies — continuous mathematics with no
+discretisation, random expander graphs with no exploitable
+structure, problems that are genuinely too tangled — the
+framework refuses to guess. It raises `NotInFamily` with a
+structured explanation (the structural tier, the meters that
+failed, suggested alternative tools) so you know exactly why.
+**No silent approximation, ever.** That refusal is by design;
+the book has a whole chapter on why honest stops are valuable.
+
 ## Status
 
-**v1.0.0 — Production / Stable** (released 2026-05-31). `pip
+**v1.1.0 — Production / Stable** (released 2026-05-31). `pip
 install structural-computing` pulls in `holant-tools >= 0.7.0`
-transparently. The public API is now semver-protected for
+transparently. The public API is semver-protected for
 downstream packages — see [docs/STABILITY.md](docs/STABILITY.md)
 for the per-method stability contract. 302 tests across ~15 test
 modules pass.
 
-**Capability surface** (post-v0.13):
+**Capability surface:**
 
 - **Counting + reliability** (v0.1–v0.3): perfect matching counts,
   rare-tail failure probabilities, single-points-of-failure,
@@ -258,171 +324,10 @@ modules pass.
   wrapper method.
 
 See [CHANGELOG.md](CHANGELOG.md) for the full release history.
-
-Companion repo
+The companion repo
 [`structural-computing-bench`](https://github.com/pcoz/structural-computing-bench)
-calibrates the router's cost models on your machine and produces a
-data file the framework loads via `apply_calibration()` — see the
-"Calibrated cost models" section below.
-
-## What this is for
-
-When you have a **combinatorially structured question** with a graph-like
-shape — perfect matching count, rare-tail failure probability,
-single-point-of-failure detection, regulator-grade configuration
-comparison, satisfying-assignment count — and the underlying graph is
-**planar / bounded-genus / GF(2)-affine** in structure, this package
-gives you exact polynomial-time answers via the FKT theorem, Kasteleyn
-orientations, and the matchgate-Holant family.
-
-When your problem is **outside** the structural family, the package
-honest-stops with `advised:external-solver` rather than producing a
-false answer.
-
-## What's inside
-
-### The friendly entry point
-
-```python
-from structural_computing import StructuralComputer
-
-sc = StructuralComputer()
-
-# Counting + reliability (v0.1–v0.3)
-sc.count_matchings(graph)              # how many perfect matchings?
-sc.witness(graph)                       # find one specific matching
-sc.tail_probability(graph, p_fail)      # exact P(no matching survives)
-sc.single_points_of_failure(graph)      # critical edges
-sc.compare(a, b, p_fail)                # which is more reliable?
-sc.audit(graph)                         # everything in one call
-sc.explain(graph)                       # human-readable plan, no jargon
-
-# Min-cost optimisation under the tropical (min, +) semiring (v0.10–v0.11)
-sc.min_weight_matching(graph, weights)              # cheapest perfect matching
-sc.min_cost_schedule(instance, cost_fn)             # optimal job-machine assignment
-sc.min_cost_flow(instance)                          # min-cost network flow
-sc.min_cost_roster(instance, preference_fn)         # optimal rostering
-sc.min_cost_dedup(instance, similarity_fn)          # entity deduplication
-sc.tropical_instance_coordinates(instance, cost_fn) # one-call structural diagnostic
-
-# Constraint solving (T0 GF(2)-affine, T1 with quadratic constraints)
-sc.count_solutions(A=A, b=b)            # 2^(n-rank) at T0, brute force at T1
-sc.find_witness_solution(A=A, b=b)      # one satisfying assignment
-sc.list_solutions(A=A, b=b)             # enumerate all (small n)
-
-# CP-SAT pre-flight (v0.13)
-sc.rewrite_cpsat_model(model)           # rewrite rank-explosive constraints
-sc.verify_cpsat_rewrite(model, result)  # verify equivalence
-sc.diagnose_constraints(constraints)    # encoding-selection diagnostic
-```
-
-### Framework primitives (for composing custom pipelines)
-
-```python
-from structural_computing import (
-    Stage, Route, run_pipeline,        # the pipeline-router driver
-    classify_graph, classify_constraint_set, classify_signature,  # the classifier
-    route,                              # tier -> member + cost
-    RichTrace,                          # aggregated routing trace
-    ReplayCache, cached_runner,         # memoisation
-    verify_pipeline,                    # small-n brute-force harness
-)
-```
-
-### Orchestrator (the "give me an answer" top-level engine)
-
-For when you don't want to think about tiers, evaluators, or reductions —
-just hand the framework a problem and a question:
-
-```python
-from structural_computing import Orchestrator
-
-orch = Orchestrator()
-
-# A planar dependency graph -- direct dispatch via T2 free-fermion.
-K4 = {
-    "rotation": {0: [1, 2, 3], 1: [0, 3, 2], 2: [0, 1, 3], 3: [0, 2, 1]},
-    "vertices": [0, 1, 2, 3],
-    "edges": [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)],
-}
-result = orch.evaluate(K4, question="matching_count")
-print(result.answer)                  # -> 3
-print(result.classification.tier)     # -> "T2"
-print(result.leaf_evaluator_used)     # -> "_brute_force_matching_leaf"
-
-# Non-planar K_{3,3}: out-of-family by default, but HybridDecomposition
-# reduces it to a sum of planar sub-problems. Supply the "extras" as hints.
-K33 = {...}                            # see tests/test_orchestrator.py
-result = orch.evaluate(K33, question="matching_count",
-                        hints={"extra_edges": [(0, 3)]})
-print(result.answer)                  # -> 6  (= 3!)
-print(result.reductions_applied)      # -> ["HybridDecomposition(via hints)"]
-print(result.sub_evaluations)         # -> 2  (forced-in branch + forced-out branch)
-```
-
-If the problem is out-of-family AND no registered reduction applies,
-the orchestrator raises `NoKnownReduction` with the classification
-attached so the caller can inspect what was tried.
-
-### Reductions / compositions / recursive decomposition
-
-For users who want to compose their own transformations directly:
-
-```python
-from structural_computing import (
-    HybridDecomposition, ReductionPlan, NormaliseGraphFormat,    # transform.py
-    LinearCombination,                                            # compose.py
-    ShannonExpansion, TreewidthBoundedDP,                         # decompose.py
-)
-```
-
-The reductions / compositions / decompositions layer is the framework's
-**in-family-boundary widener**. v0.2 ships these as REAL constructions
-(no placeholders):
-
-**Reductions** (`transform.py`):
-
-- `NormaliseGraphFormat` — coerce edge-list / adjacency-dict / rotation-
-  system inputs into a canonical form.
-- `HybridDecomposition` — branch on a small set of "extra" edges that
-  make a graph non-planar; pay 2^|extras| × O(|V|^3) for the exact
-  matching count. Includes `auto_detect_extras` greedy heuristic.
-- `RationaliseWeights` — scale real-valued edge weights to integers at
-  chosen precision, with inverse to descale the final answer.
-- `CrossingElimination` — Cai-Gorenstein 6-vertex / weight-(-1) crossover
-  gadget at each declared crossing (arXiv:1303.6729 Fig. 6). Preserves
-  matchgate signature (signed Pfaffian).
-- `HighDegreeVertexSplit` — Cai-Gorenstein 2k-node triangle-cycle
-  realisation of matchgate-realisable symmetric signatures (Theorem 9 +
-  Fig. 10).
-
-**Compositions** (`compose.py`):
-
-- `LinearCombination` — combine two or more in-family signature
-  evaluations as `sum(coeff_i * value_i)`.
-- `HolographicBasisPair` — Cai-Lu 2011 polynomial-substitution basis
-  change on symmetric signatures + matchgate-realisability check via
-  the order-2 recurrence rank test (Theorem 2.5). The Hadamard basis
-  transforms `[1, 0, 0, 1]` into the matchgate-standard
-  `[0, 2, 0, 2]` — the canonical Valiant-style holographic unlock.
-
-**Decompositions** (`decompose.py`):
-
-- `ShannonExpansion` — branch on a binary variable; recurse on each
-  branch; base case in-family.
-- `TreewidthBoundedDP` — full Bodlaender-style multi-bag DP for matching
-  count on bounded-treewidth graphs.
-
-As of v0.3, every `NotImplementedError` sketch from earlier releases
-is shipped as a real construction (`Projection`, `BranchSum`,
-`PlanarSeparator`, `RecursiveCircuitCut`, `transform_signature_general`
-for non-symmetric `HolographicBasisPair`, `discover_basis` /
-`discover_common_basis` for Cai-Lu SRP). As of v0.4, the realisability
-verdict on non-symmetric signatures and the Lipton-Tarjan auto-mode
-on `PlanarSeparator` are wired through too.
-
-See the full API reference at the worked-examples repo:
-[`docs/reference/`](https://github.com/pcoz/free-fermion-quantum-simulation/tree/main/docs/reference).
+ships a per-machine cost-model calibration runner the router
+loads via `apply_calibration()`.
 
 ## Runnable examples
 
@@ -446,92 +351,40 @@ runnable after `pip install`:
 Each example produces a bit-identically reproducible number. See
 [`examples/README.md`](examples/README.md) for the index.
 
-## Calibrated cost models
-
-The router's default cost estimates are hand-picked log2(ops) numbers.
-For machine-specific predictions, install the companion repo
-[`structural-computing-bench`](https://github.com/pcoz/structural-computing-bench),
-run the calibration once, and load the resulting data file:
-
-```python
-from my_calibration_file import CALIBRATED_COSTS
-from structural_computing import apply_calibration
-
-apply_calibration(CALIBRATED_COSTS)
-
-# Now `route(..., question=...)` surfaces wall-clock predictions,
-# and `orchestrator.evaluate(..., verbose=True)` emits a 'predict'
-# step in the workflow trace before each leaf dispatch.
-```
-
-The calibration loader is opt-in; the framework runs with hand-picked
-cost models if you skip it. See `bench/README.md` for the calibration
-sweep details.
-
 ## Documentation
 
-This repository's own documentation is organised by the
-[Diátaxis](https://diataxis.fr/) quadrant structure — index in
-[`docs/README.md`](docs/README.md):
+The full documentation lives under [`docs/`](docs/) — index at
+[`docs/README.md`](docs/README.md). The most useful entry
+points:
 
-- **Tutorial:** [`docs/tutorial/getting-started.md`](docs/tutorial/getting-started.md)
-  — 30-minute end-to-end walkthrough.
-- **How-to:** [`docs/how-to/`](docs/how-to/) — recipes for
-  specific tasks (min-cost scheduling, CP-SAT pre-flight).
-- **Reference:** [`docs/reference/api.md`](docs/reference/api.md)
-  — every public method on `StructuralComputer`.
-- **Explanation:** [`docs/explanation/`](docs/explanation/) — why
-  tropical optimisation works on the same machinery as counting.
-- **Stability contract:** [`docs/STABILITY.md`](docs/STABILITY.md)
-  — per-symbol stability tiers (Stable / Experimental / Internal).
-- **Architecture deep dive:**
-  [`docs/architecture.md`](docs/architecture.md) — comprehensive
-  system reference.
-- **Narrative guide (the book):**
-  [`docs/book.md`](docs/book.md) — a 17-chapter practitioner's
-  guide covering the paradigm, the business case, three worked
+- **The book** —
+  [`docs/book.md`](docs/book.md). A 17-chapter narrative guide
+  covering the paradigm, the business case, three worked
   examples (reliability, scheduling, CP-SAT pre-flight),
-  integration patterns, and the long-horizon view. The chapter
-  files live under [`book/`](book/) with runnable examples in
-  [`book/examples/`](book/examples/).
+  integration patterns, and the long-horizon view. **Start here
+  if you're a business analyst or a developer new to the
+  framework.**
+- **Tutorial** —
+  [`docs/tutorial/getting-started.md`](docs/tutorial/getting-started.md).
+  A 30-minute hands-on walkthrough.
+- **How-to recipes** —
+  [`docs/how-to/`](docs/how-to/) (min-cost scheduling, CP-SAT
+  pre-flight).
+- **API reference** —
+  [`docs/reference/api.md`](docs/reference/api.md): every
+  public method on `StructuralComputer` with signature, return
+  type, and one-line description.
+- **Stability contract** —
+  [`docs/STABILITY.md`](docs/STABILITY.md). Per-symbol stability
+  tiers (Stable / Experimental / Internal) under semver.
+- **Architecture deep dive** —
+  [`docs/architecture.md`](docs/architecture.md). Comprehensive
+  system reference for contributors.
 
 The companion worked-examples repo
 [`free-fermion-quantum-simulation`](https://github.com/pcoz/free-fermion-quantum-simulation)
 has the original development-trail with brute-force verification
 on every routine; this package is the **simplified PyPI form**.
-
-## Scope
-
-The framework's exact polynomial-time answers apply natively to problems
-with the right structural shape: planar, bounded-genus, matchgate-Holant-
-family, GF(2)-affine. The active development direction is the
-**reduction / composition / recursive-decomposition layer** that brings
-problems that don't *look* like this shape into it:
-
-- **Reductions** — one-shot transformations: crossing-elimination gadgets,
-  basis changes, hybrid planar/non-planar decompositions, parity-split,
-  high-degree-vertex splitting, semiring choice, and the rest of the
-  holographic-algorithm transformation arsenal.
-- **Compositions** — combining two or more in-family evaluations to
-  compute an out-of-family quantity: linear combinations, projections of
-  joint distributions, conditional compositions, tensor/Cartesian
-  products, polynomials in matchgate values, holographic-basis pairs
-  (Valiant 2004's central technique), branch-sum recombinations.
-- **Recursive decomposition** — recursively split a problem into
-  sub-problems, base case in-family: tree-decomposition / treewidth-
-  bounded dynamic programming, planar-separator divide-and-conquer,
-  tensor-network contraction in the right order, Shannon expansion
-  (branch on a variable, recurse on each branch), circuit-cutting
-  followed by per-block recursive routing.
-
-When the problem is in-shape (or reducible / composable / recursively-
-decomposable to in-shape), the framework produces exact, bit-identical
-answers in milliseconds-to-seconds.
-
-When a problem is genuinely beyond reach (continuous mathematics with no
-discretisation, unbounded matchgate rank with no decomposition, etc.) and
-no known reduction or composition fits, the framework honestly stops and
-advises the right external tool. No silent approximation.
 
 ## Built on holant-tools
 
