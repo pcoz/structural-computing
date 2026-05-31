@@ -435,19 +435,28 @@ sweep details.
 
 ## Documentation
 
-The detailed documentation lives in the companion worked-examples repo
-[`free-fermion-quantum-simulation`](https://github.com/pcoz/free-fermion-quantum-simulation)
-— the **development-trail** form of the framework, where the original
-worked examples and brute-force verification live. This package is the
-**simplified PyPI form**; together they form the full picture (origin
-+ polished form):
+This repository's own documentation is organised by the
+[Diátaxis](https://diataxis.fr/) quadrant structure — index in
+[`docs/README.md`](docs/README.md):
 
-- **Tutorial:** [`docs/getting-started.md`](https://github.com/pcoz/free-fermion-quantum-simulation/blob/main/docs/getting-started.md) — 10-minute walkthrough.
-- **Originality:** [`docs/originality.md`](https://github.com/pcoz/free-fermion-quantum-simulation/blob/main/docs/originality.md) — what's genuinely new here (dart-chain corrected primitive, basis-aware rank ≤ 2, diagnostic-layer triad).
-- **Concepts:** [`docs/concepts/`](https://github.com/pcoz/free-fermion-quantum-simulation/tree/main/docs/concepts) — Holant problems, the tier hierarchy, the four coordinates, the paradigm.
-- **Cookbook:** [`docs/cookbook/`](https://github.com/pcoz/free-fermion-quantum-simulation/tree/main/docs/cookbook) — domain recipes.
-- **Reference:** [`docs/reference/`](https://github.com/pcoz/free-fermion-quantum-simulation/tree/main/docs/reference) — API specs.
-- **Glossary + FAQ:** [`docs/glossary.md`](https://github.com/pcoz/free-fermion-quantum-simulation/blob/main/docs/glossary.md), [`docs/faq.md`](https://github.com/pcoz/free-fermion-quantum-simulation/blob/main/docs/faq.md).
+- **Tutorial:** [`docs/tutorial/getting-started.md`](docs/tutorial/getting-started.md)
+  — 30-minute end-to-end walkthrough.
+- **How-to:** [`docs/how-to/`](docs/how-to/) — recipes for
+  specific tasks (min-cost scheduling, CP-SAT pre-flight).
+- **Reference:** [`docs/reference/api.md`](docs/reference/api.md)
+  — every public method on `StructuralComputer`.
+- **Explanation:** [`docs/explanation/`](docs/explanation/) — why
+  tropical optimisation works on the same machinery as counting.
+- **Stability contract:** [`docs/STABILITY.md`](docs/STABILITY.md)
+  — per-symbol stability tiers (Stable / Experimental / Internal).
+- **Architecture deep dive:**
+  [`docs/architecture.md`](docs/architecture.md) — comprehensive
+  system reference.
+
+The companion worked-examples repo
+[`free-fermion-quantum-simulation`](https://github.com/pcoz/free-fermion-quantum-simulation)
+has the original development-trail with brute-force verification
+on every routine; this package is the **simplified PyPI form**.
 
 ## Scope
 

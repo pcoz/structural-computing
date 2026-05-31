@@ -2,10 +2,17 @@
 # To regenerate: `python scripts/run_calibration.py --out <path>`.
 
 CALIBRATED_COSTS = {
-    ('T0', 'count_solutions'): {'model': 'exponential', 'params': (8.3564940316913e-05, 0.08233733998316162), 'rms': 0.2761758261573101},
-    ('T2', 'matchgate_rank'): {'model': 'power_law', 'params': (0.00125776307757691, 3.271882171031816), 'rms': 0.17498049325684853},
-    ('T2', 'matching_count'): {'model': 'exponential', 'params': (0.0005396949697126797, 0.1316127928935648), 'rms': 0.23326350747692826},
-    ('T4', 'matching_count'): {'model': 'exponential', 'params': (0.0002926088347245634, 0.060097683600376206), 'rms': 0.7036577152844701},
+    ('T0', 'count_solutions'): {'model': 'exponential', 'params': (7.803438055420663e-05, 0.09595948964245013), 'rms': 0.1558760481363031},
+    ('T2', 'matchgate_rank'): {'model': 'power_law', 'params': (0.0008795721654360457, 3.440939479219118), 'rms': 0.18660662981458562},
+    ('T2', 'matching_count'): {'model': 'power_law', 'params': (0.00017859839697049372, 1.0024281590800304), 'rms': 0.35827609003949656},
+    ('T2', 'min_cost_dedup'): {'model': 'exponential', 'params': (0.00018878659331709845, 0.13129637835953462), 'rms': 0.17308375072514265},
+    ('T2', 'min_cost_flow'): {'model': 'exponential', 'params': (0.00022960601165544442, 0.005345957943743462), 'rms': 0.041868046665540594},
+    ('T2', 'min_cost_roster'): {'model': 'exponential', 'params': (0.0001941019476103953, 0.15478824981619158), 'rms': 0.05745951052530678},
+    ('T2', 'min_cost_schedule'): {'model': 'power_law', 'params': (0.00017259421162074036, 0.06071228820437966), 'rms': 0.10821475590436398},
+    ('T2', 'min_weight_matching'): {'model': 'power_law', 'params': (1.6592947913231185e-05, 2.3894445529485946), 'rms': 0.12795050704272257},
+    ('T2', 'rewrite_cpsat_model'): {'model': 'exponential', 'params': (0.0015059684337528473, 0.09275995777428697), 'rms': 0.23749459085486008},
+    ('T2', 'tropical_instance_coordinates'): {'model': 'power_law', 'params': (0.000704796658193621, 1.373482875121171), 'rms': 0.14407826840675836},
+    ('T4', 'matching_count'): {'model': 'power_law', 'params': (0.0004440301162859598, -0.3182282729544372), 'rms': 0.802117008129427},
 }
 
-METADATA = {'generated_at': '2026-05-31T13:53:11+00:00', 'machine': 'AMD64-Windows-11', 'python': '3.13.13', 'bench_version': '0.1.0a1'}
+METADATA = {'generated_at': '2026-05-31T14:03:10+00:00', 'machine': 'AMD64-Windows-11', 'python': '3.13.13', 'bench_version': '0.1.0a1'}

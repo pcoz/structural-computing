@@ -6,6 +6,104 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 once it reaches v1.0.0; until then, the v0.x API may shift between minor
 versions.
 
+## [1.1.0] — 2026-05-31 (post-1.0 polish: calibration + Diátaxis docs + stability promotions)
+
+**First post-v1.0 minor release.** Three deliverables of polish
+work, each picked from the v1.0.0 "carried forward to v1.1+" list.
+
+### D1 — Extended bench + calibration coverage
+
+The v1.0.0 calibration data only covered the v0.1–v0.3-era leaves
+(`matching_count`, `count_solutions`, `matchgate_rank`). v1.1.0
+extends `structural-computing-bench`'s default-evaluator menu to
+also calibrate the v0.10–v0.13 tropical + CP-SAT leaves:
+
+- `min_weight_matching` (T2): power-law fit, exponent ~2.4.
+- `min_cost_schedule` (T2): power-law, exponent ~0.06.
+- `min_cost_flow` (T2): exponential.
+- `min_cost_roster` (T2): exponential.
+- `min_cost_dedup` (T2): exponential.
+- `tropical_instance_coordinates` (T2): power-law, exponent ~1.4.
+- `rewrite_cpsat_model` (T2): exponential.
+
+Six new problem generators in `bench/problems.py` (one per
+domain-specific instance type), and corresponding entries in
+`bench/calibrate.py`'s `DEFAULT_SIZES` + `calibrate_default_evaluators`.
+
+The shipped `calibration_data/default.py` now contains 11
+calibrated entries (up from 4), giving the orchestrator's router
+wall-clock cost models for all major leaves.
+
+### D2 — Diátaxis-style documentation restructure
+
+The `docs/` directory now follows the
+[Diátaxis](https://diataxis.fr/) quadrant structure:
+
+- **Tutorial** (`docs/tutorial/getting-started.md`) — 30-minute
+  end-to-end walkthrough covering counting, reliability,
+  min-cost matching, CP-SAT pre-flight, comparison, and honest
+  stops.
+- **How-to** (`docs/how-to/`) — recipes for specific tasks:
+  - `min-cost-scheduling.md`
+  - `cpsat-preflight.md`
+- **Reference** (`docs/reference/api.md`) — every public method
+  on `StructuralComputer` with signature, return type, and
+  one-line description.
+- **Explanation** (`docs/explanation/tropical.md`) — why tropical
+  optimisation works on the same machinery as counting (the
+  semiring-choice argument).
+- **Index** (`docs/README.md`) — top-level navigation across the
+  four quadrants.
+
+The main repo `README.md` "Documentation" section now points
+into the new structure. The companion-repo reference
+(`free-fermion-quantum-simulation`) is still mentioned as the
+development-trail with brute-force verification.
+
+### D4 — Experimental-tier hardening (stability promotions)
+
+`docs/STABILITY.md` updated. Five additional symbol groups
+promoted from Experimental to Stable as of v1.1.0:
+
+- **Reduction / composition / decomposition base interfaces**:
+  `Reduction`, `ReductionResult`, `ReductionPlan`,
+  `ReductionNotApplicable`, `Composition`, `CompositionPlan`,
+  `Decomposition`, `DecompositionPlan`. These are the abstract
+  / dataclass interfaces that downstream code implements against
+  to register custom primitives.
+- **Pipeline-router framework**: `Stage`, `Route`, `StageRecord`,
+  `Trace`, `run_pipeline`, `run_pipeline_streaming`.
+- **Verifier helpers**: `brute_force_count_matchings`,
+  `brute_force_weighted_matching_sum`, `satisfies_gf2_affine`,
+  `enumerate_satisfying_assignments`, `gibbs_expectation_brute`,
+  `verify_pipeline`.
+- **Trace aggregator**: `RichTrace`, `RegimeChange`.
+- **Replay cache**: `ReplayCache`, `cached_runner`, `default_key`.
+
+The **specific implementation classes** (`HybridDecomposition`,
+`PlanarSeparator`, `HolographicBasisPair`, etc.) remain
+Experimental — their internal layout may still evolve. The
+asymmetry is documented in STABILITY.md: subclassing the base
+interface gets a Stable contract; depending on the EXACT
+internals of a specific implementation does not.
+
+### Test count
+
+302 tests still pass (no behaviour-change tests added in this
+arc; the polish work doesn't extend the test surface).
+
+### Carried forward to v1.2.0+
+
+- Domain DSL prototypes (workflow-systems integration is the
+  most-likely first target per the proposals/ folder of the
+  research repo).
+- Further experimental-tier hardening as the implementation
+  classes stabilise.
+- Additional tutorial / how-to content based on user feedback
+  once downstream packages start adopting v1.x.
+
+---
+
 ## [1.0.0] — 2026-05-31 (production-ready release; API stability contract)
 
 **The v1.0.0 milestone.** First non-alpha release. Marks the public

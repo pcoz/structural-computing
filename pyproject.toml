@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "structural-computing"
-version = "1.0.0"
+version = "1.1.0"
 description = "Declarative structural computation: exact polynomial-time answers to combinatorial questions on structured graphs, with automatic routing to the cheapest correct evaluator."
 readme = "README.md"
 requires-python = ">=3.10"

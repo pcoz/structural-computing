@@ -100,33 +100,75 @@ Stable:
 - `has_calibration_for(tier, question)`
 - `predict_seconds(tier, question, *, n)`
 
+### Reduction / composition / decomposition base interfaces
+
+Stable since **v1.1.0** (promoted from Experimental):
+
+- **Base interfaces**: `Reduction`, `ReductionResult`,
+  `ReductionPlan`, `ReductionNotApplicable`, `Composition`,
+  `CompositionPlan`, `Decomposition`, `DecompositionPlan`.
+
+These are the abstract / dataclass interfaces that downstream code
+implements against to register custom reductions / compositions /
+decompositions with the orchestrator. Their public method signatures
+and dataclass fields are now semver-protected.
+
+### Pipeline-router framework
+
+Stable since **v1.1.0** (promoted from Experimental):
+
+- `Stage`, `Route`, `StageRecord`, `Trace`, `run_pipeline`,
+  `run_pipeline_streaming`.
+
+Workflow-level routing primitives. Used heavily by
+`free-fermion-quantum-simulation`'s `pipeline-router/` examples.
+
+### Verifier helpers
+
+Stable since **v1.1.0** (promoted from Experimental):
+
+- `brute_force_count_matchings`, `brute_force_weighted_matching_sum`,
+  `satisfies_gf2_affine`, `enumerate_satisfying_assignments`,
+  `gibbs_expectation_brute`, `verify_pipeline`.
+
+Small-n verification utilities. Used by both the wrapper and the
+test suite; signatures have been stable for the entire v0.x cycle.
+
+### Trace + replay
+
+Stable since **v1.1.0** (promoted from Experimental):
+
+- `RichTrace`, `RegimeChange` (the aggregated trace + regime-change
+  detection).
+- `ReplayCache`, `cached_runner`, `default_key` (memoisation).
+
 ## Experimental API (may shift between minor releases)
 
 These are public (importable from `structural_computing`) but
 their internal layout / signatures may change before they harden:
 
-- **Reduction classes**: `Reduction`, `ReductionResult`,
-  `ReductionPlan`, `NormaliseGraphFormat`, `CrossingElimination`,
+- **Reduction implementations** (the concrete classes, not the
+  base interfaces): `NormaliseGraphFormat`, `CrossingElimination`,
   `HighDegreeVertexSplit`, `HybridDecomposition`,
   `RationaliseWeights`, `auto_detect_extras`.
-- **Composition classes**: `Composition`, `CompositionPlan`,
-  `LinearCombination`, `Projection`, `HolographicBasisPair`,
-  `HolographicBasisResult`, `BranchSum`.
-- **Decomposition classes**: `Decomposition`, `DecompositionPlan`,
-  `ShannonExpansion`, `TreewidthBoundedDP`, `PlanarSeparator`,
-  `RecursiveCircuitCut`.
-- **Pipeline-router framework**: `Stage`, `Route`, `StageRecord`,
-  `Trace`, `run_pipeline`, `run_pipeline_streaming`.
-- **Verifier helpers**: `brute_force_count_matchings`,
-  `brute_force_weighted_matching_sum`, `satisfies_gf2_affine`,
-  `enumerate_satisfying_assignments`, `gibbs_expectation_brute`,
-  `verify_pipeline`.
-- **Replay cache**: `ReplayCache`, `cached_runner`, `default_key`.
-- **Trace**: `RichTrace`, `RegimeChange`.
+- **Composition implementations**: `LinearCombination`, `Projection`,
+  `HolographicBasisPair`, `HolographicBasisResult`, `BranchSum`.
+- **Decomposition implementations**: `ShannonExpansion`,
+  `TreewidthBoundedDP`, `PlanarSeparator`, `RecursiveCircuitCut`.
 
-Code that uses these should pin a minor-version range like
-`structural-computing>=1.0,<1.1` if depending on exact internal
-behaviour.
+Note the asymmetry: the abstract base interfaces (`Reduction`,
+`Composition`, `Decomposition`, etc.) are Stable as of v1.1.0;
+the specific implementation classes are still Experimental, since
+their internal layout (which sub-problems they emit, what
+combine-rules they use, etc.) may evolve. Downstream code that
+implements ITS OWN reduction/composition/decomposition by
+subclassing the base interface gets a Stable contract; code that
+depends on the EXACT internals of `HybridDecomposition` (etc.) does
+not.
+
+Code that uses Experimental-tier symbols should pin a minor-version
+range like `structural-computing>=1.1,<1.2` if depending on exact
+internal behaviour.
 
 ## Internal (no stability promise)
 

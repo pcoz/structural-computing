@@ -26,7 +26,11 @@ from structural_computing import (
 
 
 def test_version_present():
-    assert structural_computing.__version__ == "0.6.0a1"
+    """`__version__` is present, is a non-empty string, and starts with
+    a digit (looks like a semver / PEP 440 release)."""
+    v = structural_computing.__version__
+    assert isinstance(v, str) and v
+    assert v[0].isdigit(), f"__version__ should start with a digit, got {v!r}"
 
 
 def test_public_api_complete():
