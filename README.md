@@ -79,6 +79,91 @@ reproducible, regulator-defensible — **no off-the-shelf reliability
 tool can produce**, because their internal data models are structurally
 Monte-Carlo and the question's signal lives below the sampling floor.
 
+## More worked examples
+
+### Min-cost matching (tropical / Hungarian / Edmonds)
+
+The same admissible-set machinery that counts matchings computes
+the CHEAPEST matching under the tropical (min, +) semiring:
+
+```python
+from structural_computing import StructuralComputer
+sc = StructuralComputer()
+
+graph = [(0, 1), (1, 2), (2, 3), (3, 0)]
+weights = {(0, 1): 1.0, (1, 2): 10.0, (2, 3): 1.0, (3, 0): 10.0}
+
+result = sc.min_weight_matching(graph, weights)
+# {'cost': 2.0, 'matching': [(0, 1), (2, 3)], 'feasible': True}
+```
+
+Polynomial-time exact via Hungarian (bipartite K_{n,n}) or Edmonds
+blossom (general non-bipartite); no MIP timeout, no heuristic.
+
+### CP-SAT pre-flight: faster solve via structural rewrite
+
+For models with rank-explosive constraints (cardinality constraints,
+all-different over a small range, etc.), pass your `cp_model.CpModel`
+through `sc.rewrite_cpsat_model(...)` to get either a structurally
+cheaper rewritten model OR an explicit "can't help here" signal:
+
+```python
+from structural_computing import StructuralComputer
+from ortools.sat.python import cp_model
+
+sc = StructuralComputer()
+model = cp_model.CpModel()
+xs = [model.NewBoolVar(f"x{i}") for i in range(4)]
+model.Add(sum(xs) == 2)
+
+result = sc.rewrite_cpsat_model(model)
+# result.helped == True
+# result.help_reason_text:
+#   "Rewrote 1 constraint(s) to time-slot rank-1 form;
+#    added 8 auxiliary boolean(s)."
+
+if result.helped:
+    solver = cp_model.CpSolver()
+    solver.Solve(result.rewritten_model)
+else:
+    # Honest stop: solver the original model with CP-SAT
+    solver = cp_model.CpSolver()
+    solver.Solve(model)
+```
+
+Optionally verify the rewrite preserves the feasible set on the
+original variables:
+
+```python
+verify = sc.verify_cpsat_rewrite(model, result, enumeration_limit=1000)
+# verify.equivalent == True
+# verify.n_original_solutions == 6  (= C(4, 2))
+```
+
+### Schedule optimisation in one line
+
+`min_cost_schedule` wraps the full tropical scheduling pipeline:
+
+```python
+import holant_tools
+from structural_computing import StructuralComputer
+
+sc = StructuralComputer()
+
+jobs = [holant_tools.Job(name="J1"), holant_tools.Job(name="J2")]
+machines = [holant_tools.Machine(name="M1"), holant_tools.Machine(name="M2")]
+instance = holant_tools.SchedulingInstance(jobs=jobs, machines=machines)
+
+def cost_fn(job, machine, slot):
+    # cheap when matched to preferred machine
+    if job.name == "J1": return 1.0 if machine.name == "M1" else 5.0
+    return 5.0 if machine.name == "M1" else 1.0
+
+result = sc.min_cost_schedule(instance, cost_fn)
+# result['cost'] == 2.0
+# result['schedule'] == {'J1': ('M1', 0), 'J2': ('M2', 0)}
+```
+
 ## The underlying claim
 
 Many problems people actually care about — counting valid configurations,
@@ -105,37 +190,39 @@ layer for users widening the in-family boundary.
 
 ## Status
 
-**Alpha** (v0.6.0a1; live on PyPI 2026-05-31). `pip install
-structural-computing` pulls in `holant-tools 0.6.1` transparently.
-API may still shift before v1.0, but the public surface is now
-stable enough for downstream prototyping. 281 tests
-across ~15 test modules pass; the orchestrator handles all three
-problem types (graphs / constraint sets / signatures) with full
-provenance, including non-symmetric signatures via the general
-tensor-power holographic transform. The reductions / compositions /
-recursive-decomposition layer ships real Cai-Gorenstein and Cai-Lu
-constructions, not placeholders -- every v0.2-era `NotImplementedError`
-stub is now a working primitive. v0.3 closed the calibration loop and
-the holographic toolkit; v0.4 added MGI realisability checking,
-Lipton-Tarjan auto-separator, and a closed-form SRP shortcut; v0.5
-closed three honest-scope gaps (full d-admissibility at arity 6
-odd-parity, Lipton-Tarjan tree-edge backup, closed-form SRP for
-complex roots); **v0.6** is a cleanup + math-completeness round:
+**v1.0.0 — Production / Stable** (released 2026-05-31). `pip
+install structural-computing` pulls in `holant-tools >= 0.7.0`
+transparently. The public API is now semver-protected for
+downstream packages — see [docs/STABILITY.md](docs/STABILITY.md)
+for the per-method stability contract. 302 tests across ~15 test
+modules pass.
 
-- **Augmented Plücker helper promoted to `holant-tools v0.6.0`**
-  (D1) — the v0.5 prototype-in-place math primitive now lives in
-  the mathematical engine, honouring the architectural principle.
-- **Lipton-Tarjan level-based + articulation-augmentation backup**
-  (D2) — three-step backup chain (simple → tree-edge → level-based)
-  catches star K_{1,n} and complete-bipartite K_{2,n} adversarial
-  graphs that defeat v0.5's tree-edge approach.
-- **|S| = 4 (m = 3) augmented Plücker at arity ≥ 8** (D3) — via
-  `holant-tools v0.6.1`, the augmented enumeration count grows
-  from 280 (m=1) to 560 (m=1 + m=3) at arity 8, and from 1260 to
-  5460 at arity 10.
+**Capability surface** (post-v0.13):
 
-See [CHANGELOG.md](CHANGELOG.md) for what's in this release and what's
-coming.
+- **Counting + reliability** (v0.1–v0.3): perfect matching counts,
+  rare-tail failure probabilities, single-points-of-failure,
+  regulator-grade configuration comparison.
+- **Realisability + holographic toolkit** (v0.4–v0.6): MGI
+  realisability check, full Cai-Lu §4 d-admissibility, Lipton-Tarjan
+  5-tier auto-separator cascade (v0.4 simple → v0.5 tree-edge →
+  v0.6 level-based → v0.8 fundamental-cycle → v0.9 explicit
+  planar-dual), closed-form SRP for both real and complex roots.
+- **Tropical / min-cost optimisation** (v0.10–v0.11): the same
+  admissible-set machinery computes MIN-COST configurations under
+  the (min, +) semiring — `sc.min_weight_matching`,
+  `sc.min_cost_schedule`, `sc.min_cost_flow`, `sc.min_cost_roster`,
+  `sc.min_cost_dedup`, `sc.tropical_instance_coordinates`.
+- **CP-SAT pre-flight** (v0.13): pass a `cp_model.CpModel` to
+  `sc.rewrite_cpsat_model(...)` and get back either a
+  structurally cheaper rewritten model OR an explicit
+  "can't help here" signal.
+- **Wrapper consolidation** (v0.12): the friendly
+  `StructuralComputer` wrapper delegates through the
+  `Orchestrator` engine; any new question registered in the
+  leaf-evaluator registry is automatically reachable via a thin
+  wrapper method.
+
+See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 
 Companion repo
 [`structural-computing-bench`](https://github.com/pcoz/structural-computing-bench)
@@ -165,6 +252,8 @@ false answer.
 from structural_computing import StructuralComputer
 
 sc = StructuralComputer()
+
+# Counting + reliability (v0.1–v0.3)
 sc.count_matchings(graph)              # how many perfect matchings?
 sc.witness(graph)                       # find one specific matching
 sc.tail_probability(graph, p_fail)      # exact P(no matching survives)
@@ -172,6 +261,24 @@ sc.single_points_of_failure(graph)      # critical edges
 sc.compare(a, b, p_fail)                # which is more reliable?
 sc.audit(graph)                         # everything in one call
 sc.explain(graph)                       # human-readable plan, no jargon
+
+# Min-cost optimisation under the tropical (min, +) semiring (v0.10–v0.11)
+sc.min_weight_matching(graph, weights)              # cheapest perfect matching
+sc.min_cost_schedule(instance, cost_fn)             # optimal job-machine assignment
+sc.min_cost_flow(instance)                          # min-cost network flow
+sc.min_cost_roster(instance, preference_fn)         # optimal rostering
+sc.min_cost_dedup(instance, similarity_fn)          # entity deduplication
+sc.tropical_instance_coordinates(instance, cost_fn) # one-call structural diagnostic
+
+# Constraint solving (T0 GF(2)-affine, T1 with quadratic constraints)
+sc.count_solutions(A=A, b=b)            # 2^(n-rank) at T0, brute force at T1
+sc.find_witness_solution(A=A, b=b)      # one satisfying assignment
+sc.list_solutions(A=A, b=b)             # enumerate all (small n)
+
+# CP-SAT pre-flight (v0.13)
+sc.rewrite_cpsat_model(model)           # rewrite rank-explosive constraints
+sc.verify_cpsat_rewrite(model, result)  # verify equivalence
+sc.diagnose_constraints(constraints)    # encoding-selection diagnostic
 ```
 
 ### Framework primitives (for composing custom pipelines)
@@ -400,7 +507,7 @@ If you use this package in published work, please cite:
 
 ```
 Edward Chalk (sapientronic.ai). "structural-computing: declarative
-structural computation in Python." Version 0.6.0a1, 2026.
+structural computation in Python." Version 1.0.0, 2026.
 https://github.com/pcoz/structural-computing
 ```
 
@@ -435,12 +542,32 @@ https://github.com/pcoz/structural-computing
   the augmented-Plücker enumeration with the m = 3 (|S|=4)
   configuration via `holant-tools v0.6.1` (count at arity 8: 280 →
   560; at arity 10: 1260 → 5460). 281 tests passing.
-- **v0.7.0** (next): higher-m augmented Plücker configurations
-  (m = 5 at arity ≥ 10, m = 7 at arity ≥ 12, ...); full
-  Lipton-Tarjan 1979 backup with planar-dual fundamental-cycle
-  counting (for adversarial cases the v0.6 simplification can't
-  bound); tropical optimisation (NEXT.md §δ) and/or CP-SAT
-  diagnostic layer (§ε) as research-track extensions; PyPI
-  publication.
-- **v1.0.0**: API stability contract; production-ready for downstream
-  packages.
+- **v0.7 arc (2026-05-31)**: PyPI publication unblock. All three
+  packages (holant-tools, structural-computing,
+  structural-computing-bench) landed on PyPI for the first time.
+  No version bumps; just availability.
+- **v0.8.0a1**: D1 — full augmented Plücker enumeration across
+  every viable m (m ∈ {1, 3, 5, 7, ...}) via holant-tools
+  v0.7.0. D2 — fundamental-cycle backup as the 4th tier of the
+  Lipton-Tarjan cascade. 285 tests passing.
+- **v0.9.0a1**: full LT 1979 with explicit planar-dual as the
+  5th tier of the LT cascade. With rotation system input, the
+  cascade is now theoretically complete per LT 1979's existence
+  guarantee. 290 tests.
+- **v0.10.0a1**: tropical optimisation wired into the
+  orchestrator. `min_weight_matching` and `min_cost_schedule`
+  reachable via `StructuralComputer`. 295 tests.
+- **v0.11.0a1**: finish tropical wiring. `min_cost_flow`,
+  `min_cost_roster`, `min_cost_dedup`,
+  `tropical_instance_coordinates` all reachable. 299 tests.
+- **v0.12.0a1**: wrapper consolidation. `StructuralComputer`
+  delegates 13 single-leaf methods through the internal
+  `Orchestrator` instance — single source of truth for
+  evaluation logic.
+- **v0.13.0a1** (current): CP-SAT diagnostic + rewrite layer.
+  `sc.rewrite_cpsat_model(model)` returns a structurally cheaper
+  rewritten `cp_model.CpModel` or an explicit "can't help"
+  signal. 302 tests.
+- **v1.0.0** (next): API stability contract; production-ready
+  for downstream packages. Documentation pass + calibration
+  runs on the new leaves + per-method stability markers.

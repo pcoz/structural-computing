@@ -6,6 +6,85 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 once it reaches v1.0.0; until then, the v0.x API may shift between minor
 versions.
 
+## [1.0.0] — 2026-05-31 (production-ready release; API stability contract)
+
+**The v1.0.0 milestone.** First non-alpha release. Marks the public
+API as semver-protected for downstream packages — `pip install
+structural-computing>=1.0,<2.0` is now a stable pin.
+
+### Stability contract
+
+See [docs/STABILITY.md](docs/STABILITY.md) for the full
+per-symbol contract. Summary:
+
+- **Stable tier**: `StructuralComputer` and every method on it,
+  the `Classification` dataclass and the classifier helpers
+  (`classify`, `classify_graph`, `classify_constraint_set`,
+  `classify_signature`), the `Orchestrator` constructor + the
+  `evaluate(...)` method, the `OrchestratorResult` /
+  `WorkflowStep` dataclasses, the `DEFAULT_LEAF_REGISTRY` dict,
+  the public exceptions (`NotInFamily`, `NoKnownReduction`,
+  `ReductionNotApplicable`), and the calibration helpers
+  (`apply_calibration`, etc.). Breaking changes to these
+  require a major-version bump (v2.0.0).
+- **Experimental tier**: reductions / compositions /
+  decompositions classes, pipeline-router framework, verifier
+  helpers, replay cache, trace aggregator. Public but may shift
+  between minor releases.
+- **Internal tier**: anything underscore-prefixed (including
+  the per-question leaf evaluator functions). No stability
+  promise.
+
+### Documentation pass
+
+- README refreshed to reflect post-v0.13 capability surface:
+  counting + reliability, tropical / min-cost optimisation,
+  CP-SAT pre-flight, wrapper consolidation.
+- New "More worked examples" section in the README with
+  runnable snippets for `sc.min_weight_matching`,
+  `sc.rewrite_cpsat_model` (+ `verify_cpsat_rewrite`), and
+  `sc.min_cost_schedule`.
+- The `StructuralComputer` cheat-sheet at the top of the README
+  now lists all 30+ public methods grouped by capability.
+- New `docs/STABILITY.md` filed (the per-symbol stability
+  contract).
+- Citation block updated v0.13.0a1 → v1.0.0.
+
+### Calibration runs
+
+- Ran `structural-computing-bench` calibration on the current
+  machine (`AMD64-Windows-11`, Python 3.13.13). Produced
+  `calibration_data/default.py` with `CALIBRATED_COSTS` keyed
+  by (tier, question). The orchestrator's router now has
+  wall-clock cost models for matching_count (T2/T4),
+  count_solutions (T0), and matchgate_rank (T2).
+- The tropical + CP-SAT leaves were added too late in the v0.x
+  cycle to be calibrated in this run; the v0.3 calibration
+  loop's default-evaluator menu doesn't yet include them.
+  Calibrating the new leaves is a small bench-side follow-on
+  for v1.1.0+.
+
+### Version sync fix
+
+- `structural_computing.__version__` had been stale at
+  `0.6.0a1` since the v0.6 release while `pyproject.toml`
+  marched on. Now synced at `1.0.0`.
+
+### `Development Status` classifier
+
+- `pyproject.toml`: `3 - Alpha` → `5 - Production/Stable`. The
+  PyPI search badge now reflects the production-ready status.
+
+### What's NOT in v1.0.0 (carried forward to v1.1.0+)
+
+- Calibration data for the tropical + CP-SAT leaves (per-machine;
+  bench-side enhancement).
+- Domain DSLs (workflow-systems, catastrophe-modelling, etc.) —
+  sketched in the research roadmap, not yet code.
+- Further worked examples + tutorial expansion.
+
+---
+
 ## [0.13.0a1] — 2026-05-31 (v0.13 arc: CP-SAT diagnostic layer)
 
 **New user-facing capability: pre-flight your CP-SAT model.** The
